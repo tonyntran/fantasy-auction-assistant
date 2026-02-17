@@ -5,7 +5,7 @@ export default function InflationGraph({ history }) {
 
   const data = history.map(([ts, factor], i) => ({
     pick: i + 1,
-    inflation: Number(factor.toFixed(3)),
+    inflation: Number(Number(factor).toFixed(3)),
   }))
 
   return (

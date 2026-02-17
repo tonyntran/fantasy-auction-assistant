@@ -23,7 +23,7 @@ export default function ActivityFeed({ events }) {
 
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = 0
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [events?.length])
 
@@ -44,7 +44,7 @@ export default function ActivityFeed({ events }) {
         <h2 className="card-title text-sm text-primary">Live Ticker</h2>
         <div ref={scrollRef} className="max-h-48 overflow-y-auto space-y-1">
           {events.map((e, i) => (
-            <div key={i} className="flex items-start gap-2 text-xs">
+            <div key={`${e.event_type}-${e.timestamp || i}`} className="flex items-start gap-2 text-xs">
               <span className={`badge badge-xs ${TYPE_BADGE[e.event_type] || 'badge-ghost'} shrink-0 mt-0.5`}>
                 {TYPE_LABEL[e.event_type] || '?'}
               </span>

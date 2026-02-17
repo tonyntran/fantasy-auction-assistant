@@ -29,6 +29,41 @@
       return;
     }
 
+    // Handle Sleeper player cache: save to chrome.storage.local
+    if (event.data.payload?.cacheSleeperPlayers) {
+      chrome.storage.local.set({
+        sleeperPlayers: event.data.payload.cacheSleeperPlayers,
+        sleeperPlayersCachedAt: Date.now(),
+      }).catch((err) => console.warn("[FAA Bridge] Failed to cache Sleeper players:", err));
+      return;
+    }
+
+    // Handle Sleeper player cache: load from chrome.storage.local
+    if (event.data.payload?.requestSleeperPlayersCache) {
+      chrome.storage.local.get(["sleeperPlayers", "sleeperPlayersCachedAt"]).then((result) => {
+        const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+        const isStale = !result.sleeperPlayersCachedAt || (Date.now() - result.sleeperPlayersCachedAt > ONE_WEEK_MS);
+        window.postMessage(
+          {
+            type: MESSAGE_TYPE,
+            direction: "from-bridge",
+            payload: { cachedSleeperPlayers: isStale ? null : (result.sleeperPlayers || null) },
+          },
+          "*"
+        );
+      }).catch(() => {
+        window.postMessage(
+          {
+            type: MESSAGE_TYPE,
+            direction: "from-bridge",
+            payload: { cachedSleeperPlayers: null },
+          },
+          "*"
+        );
+      });
+      return;
+    }
+
     // Forward manual command to background service worker
     if (event.data.payload?.manualCommand) {
       chrome.runtime

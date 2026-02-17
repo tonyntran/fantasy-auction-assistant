@@ -23,7 +23,8 @@ from models import DraftUpdate, FullAdvice
 from config import settings
 from state import DraftState
 from engine import get_engine_advice
-from ai_advisor import get_ai_advice, precompute_advice
+from ai_advisor import get_ai_advice, precompute_advice, ai_status as _ai_status_ref
+import ai_advisor as _ai_advisor_mod
 from event_store import EventStore
 from projections import load_and_merge_projections
 from ticker import TickerBuffer, TickerEvent, TickerEventType
@@ -89,6 +90,7 @@ async def lifespan(app: FastAPI):
     print(f"\n{'='*60}")
     print(f"  Fantasy Auction Assistant")
     print(f"{'='*60}")
+    print(f"  Platform:        {settings.platform}")
     print(f"  Sport:           {settings.sport_name}")
     print(f"  Roster slots:    {settings.roster_slots}")
     print(f"  Players loaded:  {len(state.players)}")
@@ -99,8 +101,14 @@ async def lifespan(app: FastAPI):
     print(f"  Budget:          ${settings.budget}")
     print(f"  League size:     {settings.league_size}")
     print(f"  Inflation:       {state.get_inflation_factor():.3f}")
-    ai_status = "configured" if settings.gemini_api_key and not settings.gemini_api_key.startswith("your-") else "not configured (engine-only mode)"
-    print(f"  Gemini AI:       {ai_status}")
+    from ai_advisor import _has_ai_key
+    provider = settings.ai_provider.lower()
+    if _has_ai_key():
+        model = settings.claude_model if provider == "claude" else settings.gemini_model
+        ai_display = f"{provider} ({model})"
+    else:
+        ai_display = "not configured (engine-only mode)"
+    print(f"  AI Provider:     {ai_display}")
     print(f"{'='*60}\n")
     yield
     event_store.close()
@@ -108,9 +116,7 @@ async def lifespan(app: FastAPI):
 
 def _replay_manual_command(cmd: str, state: DraftState):
     """Replay a manual command during event log recovery (no logging, no event store writes)."""
-    import re as _re
-
-    undo_match = _re.match(r"^undo\s+(.+)$", cmd, _re.IGNORECASE)
+    undo_match = re.match(r"^undo\s+(.+)$", cmd, re.IGNORECASE)
     if undo_match:
         player_name = undo_match.group(1).strip()
         player = state.get_player(player_name)
@@ -128,7 +134,7 @@ def _replay_manual_command(cmd: str, state: DraftState):
             state._recompute_aggregates()
         return
 
-    budget_match = _re.match(r"^budget\s+(\d+)$", cmd, _re.IGNORECASE)
+    budget_match = re.match(r"^budget\s+(\d+)$", cmd, re.IGNORECASE)
     if budget_match:
         new_budget = int(budget_match.group(1))
         state.my_team.budget = new_budget
@@ -138,7 +144,7 @@ def _replay_manual_command(cmd: str, state: DraftState):
         state._recompute_aggregates()
         return
 
-    sold_match = _re.match(r"^(.+?)\s+(\d+)(?:\s+(\d+))?\s*$", cmd)
+    sold_match = re.match(r"^(.+?)\s+(\d+)(?:\s+(\d+))?\s*$", cmd)
     if sold_match:
         player_name = sold_match.group(1).strip()
         price = int(sold_match.group(2))
@@ -181,6 +187,10 @@ async def draft_update(data: DraftUpdate):
     """
     state = DraftState()
     ticker = TickerBuffer()
+
+    # Auto-detect platform from extension payload
+    if data.platform and data.platform.lower() in ("espn", "sleeper"):
+        settings.platform = data.platform.lower()
 
     # Auto-detect sport from extension payload (if SPORT=auto)
     if data.sport and state.resolved_sport == "auto":
@@ -232,7 +242,7 @@ async def draft_update(data: DraftUpdate):
 
     # Terminal logging
     now = datetime.now().strftime("%H:%M:%S")
-    print(f"\n[{now}] Draft Update")
+    print(f"\n[{now}] Draft Update ({settings.platform})")
 
     player_name: Optional[str] = None
     current_bid: float = 0
@@ -256,8 +266,12 @@ async def draft_update(data: DraftUpdate):
     if player_name:
         engine_advice = get_engine_advice(player_name, current_bid, state)
 
-        # Fire-and-forget AI pre-computation (won't block response)
-        asyncio.create_task(precompute_advice(player_name, current_bid, state))
+        # Fire-and-forget AI pre-computation — only on NEW nominations
+        from ai_advisor import _advice_cache, CACHE_TTL_SECONDS as _AI_TTL
+        _ai_key = player_name.lower().strip()
+        _ai_cached = _advice_cache.get(_ai_key)
+        if not _ai_cached or (time.time() - _ai_cached[1]) >= _AI_TTL:
+            asyncio.create_task(precompute_advice(player_name, current_bid, state))
 
         # Build HTML for the overlay
         advice_html = _format_advice_html(player_name, current_bid, engine_advice)
@@ -509,6 +523,29 @@ async def health_check():
     }
 
 
+@app.get("/team_aliases")
+async def get_team_aliases():
+    """Get current team aliases."""
+    state = DraftState()
+    return {"aliases": state.team_aliases, "teams": list(state.team_budgets.keys())}
+
+
+@app.post("/team_aliases")
+async def set_team_aliases(request: dict):
+    """Set team display aliases. Body: {"Team 1": "Alice", "Team 3": "Me"}"""
+    state = DraftState()
+    for original, alias in request.items():
+        if isinstance(alias, str) and alias.strip():
+            state.team_aliases[original] = alias.strip()
+            # If the alias matches MY_TEAM_NAME, register the original so _is_my_team works
+            existing = [a.strip().lower() for a in settings.my_team_name.split(",")]
+            if state._is_my_team(alias) and original.strip().lower() not in existing:
+                settings.my_team_name = settings.my_team_name + "," + original
+                print(f"  [Alias] Registered '{original}' as my team alias")
+    print(f"  [Alias] Team aliases: {state.team_aliases}")
+    return {"aliases": state.team_aliases}
+
+
 @app.get("/opponents")
 async def get_opponents():
     """View opponent positional needs and threat levels."""
@@ -534,24 +571,11 @@ async def get_nominations():
 
 @app.get("/stream/{player}")
 async def stream_advice(player: str, bid: float = 0):
-    """Stream AI advice as Server-Sent Events."""
-    from sse_starlette.sse import EventSourceResponse
-    from ai_advisor import stream_ai_advice
-
-    async def event_generator():
-        state = DraftState()
-        engine_advice = get_engine_advice(player, bid, state)
-
-        # First event: engine advice (instant)
-        yield {"event": "engine", "data": json.dumps(engine_advice.model_dump(), default=str)}
-
-        # Stream AI reasoning
-        async for chunk in stream_ai_advice(player, bid, state, engine_advice):
-            yield {"event": "ai_chunk", "data": chunk}
-
-        yield {"event": "done", "data": ""}
-
-    return EventSourceResponse(event_generator())
+    """Get advice for a player. Returns cached AI advice or engine-only."""
+    state = DraftState()
+    engine_advice = get_engine_advice(player, bid, state)
+    full_advice = await get_ai_advice(player, bid, state, engine_advice)
+    return full_advice.model_dump()
 
 
 @app.get("/whatif")
@@ -579,8 +603,6 @@ async def grade():
 @app.get("/dashboard/state")
 async def dashboard_state():
     """Full state snapshot for the web dashboard."""
-    from sleeper_watch import get_sleeper_candidates
-    from nomination import get_nomination_suggestions
     state = DraftState()
     return _get_dashboard_snapshot(state)
 
@@ -631,7 +653,8 @@ async def websocket_endpoint(ws: WebSocket):
                 state = DraftState()
                 state.update_from_draft_event(update)
     except WebSocketDisconnect:
-        ws_clients.remove(ws)
+        if ws in ws_clients:
+            ws_clients.remove(ws)
 
 
 # -----------------------------------------------------------------
@@ -691,7 +714,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
             "vorp": round(ps.vorp, 1),
             "is_drafted": ps.is_drafted,
             "draft_price": ps.draft_price,
-            "drafted_by": ps.drafted_by_team,
+            "drafted_by": state.apply_alias(ps.drafted_by_team),
             "adp_value": ps.adp_value,
             "vona": round(ps.vona, 1),
             "vona_next_player": ps.vona_next_player,
@@ -706,20 +729,93 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
             for p in remaining
         ]
 
+    # Apply team aliases to ticker events
+    ticker_events = TickerBuffer().get_recent(20)
+    for evt in ticker_events:
+        if evt.get("team_name"):
+            evt["team_name"] = state.apply_alias(evt["team_name"])
+        if evt.get("message"):
+            for orig, alias in state.team_aliases.items():
+                evt["message"] = evt["message"].replace(orig, alias)
+
+    # Current nomination advice (if someone is on the block)
+    # Check AI cache first, fall back to engine-only
+    current_advice = None
+    raw_nom = state.raw_latest.get("currentNomination")
+    if raw_nom and isinstance(raw_nom, dict) and raw_nom.get("playerName"):
+        nom_player = raw_nom["playerName"]
+        nom_bid = state.raw_latest.get("currentBid") or 0
+        nom_bidder = state.raw_latest.get("highBidder")
+        try:
+            engine_advice = get_engine_advice(nom_player, nom_bid, state)
+
+            # Try to use cached AI advice if available
+            from ai_advisor import _advice_cache, CACHE_TTL_SECONDS
+            cache_key = nom_player.lower().strip()
+            ai_cached = _advice_cache.get(cache_key)
+            if ai_cached and (time.time() - ai_cached[1]) < CACHE_TTL_SECONDS:
+                ai = ai_cached[0]
+                current_advice = {
+                    "player": nom_player,
+                    "current_bid": nom_bid,
+                    "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
+                    "action": ai.action.value,
+                    "max_bid": ai.max_bid,
+                    "fmv": ai.fmv,
+                    "inflation_rate": round(state.get_inflation_factor(), 3),
+                    "reasoning": ai.reasoning,
+                    "vona": engine_advice.vona,
+                    "vona_next_player": engine_advice.vona_next_player,
+                    "source": ai.source,
+                }
+            else:
+                current_advice = {
+                    "player": nom_player,
+                    "current_bid": nom_bid,
+                    "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
+                    "action": engine_advice.action.value,
+                    "max_bid": engine_advice.max_bid,
+                    "fmv": engine_advice.fmv,
+                    "inflation_rate": round(state.get_inflation_factor(), 3),
+                    "reasoning": engine_advice.reasoning,
+                    "vona": engine_advice.vona,
+                    "vona_next_player": engine_advice.vona_next_player,
+                    "source": "engine",
+                }
+        except Exception:
+            pass
+
+    # Apply team aliases to opponent needs
+    opponent_needs = state.opponent_tracker.get_summary()
+    # Build aliased name→team_id mapping so frontend can correlate budget names to roster data
+    name_to_id = {}
+    for tid, tname in opponent_needs.get("team_names", {}).items():
+        aliased = state.apply_alias(tname)
+        name_to_id[aliased] = tid
+    opponent_needs["name_to_id"] = name_to_id
+    # Set display_name on each threat entry
+    for t in opponent_needs.get("threat_levels", []):
+        tid = str(t.get("team_id", ""))
+        raw_name = opponent_needs.get("team_names", {}).get(tid, tid)
+        t["display_name"] = state.apply_alias(raw_name)
+
     return {
         "players": players,
         "my_team": state.my_team.model_dump(),
-        "budgets": state.team_budgets,
+        "budgets": state.get_aliased_budgets(),
+        "team_aliases": state.team_aliases,
         "inflation": round(state.get_inflation_factor(), 3),
         "inflation_history": state.inflation_history,
         "draft_log": state.draft_log,
         "positional_need": state.get_positional_need(),
         "sleepers": get_sleeper_candidates(state),
         "nominations": get_nomination_suggestions(state),
-        "opponent_needs": state.opponent_tracker.get_summary(),
+        "opponent_needs": opponent_needs,
         "top_remaining": top_remaining,
-        "ticker_events": TickerBuffer().get_recent(20),
+        "ticker_events": ticker_events,
         "dead_money_alerts": state.dead_money_log,
+        "current_advice": current_advice,
+        "ai_status": _ai_advisor_mod.ai_status,
         "sport": settings.sport,
         "positions": settings.positions,
         "display_positions": settings.display_positions,

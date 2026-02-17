@@ -23,6 +23,17 @@ export default function Header({ state, connected }) {
         <div className="badge badge-primary badge-outline">
           {state?.draft_log?.length ?? 0} drafted
         </div>
+        {state?.ai_status && (
+          <div className={`badge badge-sm ${
+            state.ai_status === 'ok' ? 'badge-success' :
+            state.ai_status === 'idle' ? 'badge-ghost' :
+            state.ai_status === 'no_key' ? 'badge-ghost' :
+            state.ai_status.startsWith('rate_limited') ? 'badge-warning' :
+            'badge-error'
+          }`} title={`AI: ${state.ai_status}`}>
+            AI: {state.ai_status}
+          </div>
+        )}
       </div>
     </div>
   )

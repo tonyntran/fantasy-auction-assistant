@@ -55,7 +55,7 @@ export default function DraftBoard({ players, positions = [], positionBadges = {
               {filtered.map(p => (
                 <tr key={p.name} className={p.is_drafted ? 'opacity-30' : ''}>
                   <td>
-                    <span className={p.drafted_by?.toLowerCase().includes('my') ? 'text-primary font-medium' : ''}>
+                    <span className={p.drafted_by === 'My Team' || p.drafted_by?.toLowerCase() === (import.meta.env.VITE_MY_TEAM || 'my team') ? 'text-primary font-medium' : ''}>
                       {p.name}
                     </span>
                   </td>

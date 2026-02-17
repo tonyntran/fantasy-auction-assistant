@@ -20,8 +20,8 @@ export default function NominationPanel({ nominations }) {
           <p className="text-xs opacity-50">No suggestions available.</p>
         ) : (
           <div className="space-y-2">
-            {nominations.map((n, i) => (
-              <div key={i} className="bg-base-300 rounded-lg px-3 py-2">
+            {nominations.map((n) => (
+              <div key={`${n.player_name}-${n.strategy}`} className="bg-base-300 rounded-lg px-3 py-2">
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold">{n.player_name}</span>

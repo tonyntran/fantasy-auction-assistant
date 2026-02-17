@@ -82,6 +82,9 @@ class DraftState:
         # Dead money log (overpay alerts)
         self.dead_money_log: list[dict] = []
 
+        # Team display aliases (e.g. {"Team 1": "Alice", "Team 3": "TonyCollects"})
+        self.team_aliases: dict[str, str] = {}
+
         # Resolved sport for auto-detect mode
         self.resolved_sport: str = settings.sport
 
@@ -252,11 +255,18 @@ class DraftState:
         # Snapshot currently drafted keys so we can detect new sales
         previously_drafted = {k for k, ps in self.players.items() if ps.is_drafted}
 
-        # Update team budgets
+        # Update team budgets — key by teamId to avoid duplicate entries
+        # when team names resolve later (e.g. Sleeper "Team 3" → "tonytran")
+        new_budgets = {}
         for team in data.teams:
-            team_key = team.name if team.name != "Unknown" else str(team.teamId)
-            if team.remainingBudget is not None:
-                self.team_budgets[team_key] = team.remainingBudget
+            name = team.name or ""
+            if name in ("Unknown", "null", "undefined", "None", ""):
+                name = str(team.teamId) if team.teamId else None
+            if name and team.remainingBudget is not None:
+                new_budgets[name] = team.remainingBudget
+        if new_budgets:
+            # Replace wholesale — the extension always sends the full team list
+            self.team_budgets = new_budgets
 
         # Mark newly drafted players from the draft log
         for entry in data.draftLog:
@@ -304,16 +314,21 @@ class DraftState:
     def _is_my_team(self, name: Optional[str]) -> bool:
         if not name:
             return False
-        return name.lower().strip() == settings.my_team_name.lower().strip()
+        name_lower = name.lower().strip()
+        # MY_TEAM_NAME can be comma-separated for aliases (e.g. "Tony's Talented Team,tonytran")
+        for alias in settings.my_team_name.split(","):
+            if alias.strip().lower() == name_lower:
+                return True
+        return False
 
     @staticmethod
     def _resolve_team_name(
-        team_id: Optional[int], teams: list[TeamInfo]
+        team_id, teams: list[TeamInfo]
     ) -> Optional[str]:
-        if team_id is None:
+        if team_id is None or str(team_id) in ("null", "undefined", "None", ""):
             return None
         for t in teams:
-            if t.teamId == team_id:
+            if str(t.teamId) == str(team_id):
                 return t.name
         return str(team_id)
 
@@ -386,6 +401,16 @@ class DraftState:
         """How many open slots can accept each position?"""
         return self.my_team.positional_need_summary(settings.SLOT_ELIGIBILITY)
 
+    def apply_alias(self, name: Optional[str]) -> Optional[str]:
+        """Apply team alias for display. Returns aliased name or original."""
+        if not name:
+            return name
+        return self.team_aliases.get(name, name)
+
+    def get_aliased_budgets(self) -> dict[str, int]:
+        """Return team_budgets with aliases applied to keys."""
+        return {self.apply_alias(k): v for k, v in self.team_budgets.items()}
+
     def get_state_summary(self) -> dict:
         """JSON-serializable summary for the /state endpoint."""
         drafted_count = sum(1 for ps in self.players.values() if ps.is_drafted)
@@ -399,6 +424,7 @@ class DraftState:
             "my_team": self.my_team.model_dump(),
             "positional_need": self.get_positional_need(),
             "roster_config": settings.roster_slots,
-            "team_budgets": self.team_budgets,
+            "team_budgets": self.get_aliased_budgets(),
+            "team_aliases": self.team_aliases,
             "draft_log_length": len(self.draft_log),
         }

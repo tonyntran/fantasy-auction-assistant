@@ -1,15 +1,33 @@
 // content.js - MAIN world script
-// Accesses ESPN's React fiber state to extract live auction draft data
+// Accesses ESPN React fiber state or Sleeper API to extract live auction draft data
 
 (function () {
   "use strict";
 
   const POLL_INTERVAL_MS = 500;
+  const SLEEPER_API_BASE = "https://api.sleeper.app/v1";
   const MESSAGE_TYPE = "FANTASY_AUCTION_ASSISTANT";
   let overlayElement = null;
   let lastDataHash = null;
   let debugDumped = false;
   let minimizeState = 0; // 0=full, 1=compact, 2=hidden
+
+  // =========================================================
+  // Platform Detection
+  // =========================================================
+
+  function detectPlatform() {
+    const host = window.location.hostname;
+    if (host.includes("sleeper.com") || host.includes("sleeper.app")) return "sleeper";
+    return "espn";
+  }
+
+  const PLATFORM = detectPlatform();
+
+  // Install WebSocket interceptor immediately for Sleeper (before their JS connects)
+  if (PLATFORM === "sleeper") {
+    installSleeperWebSocketInterceptor();
+  }
 
   // Watch list (persisted in localStorage)
   const WATCHLIST_KEY = "faa_watchlist";
@@ -160,9 +178,14 @@
 
   function detectSport() {
     const url = window.location.href;
+    // ESPN URLs: /football/draft, /basketball/draft, etc.
     if (url.includes('/basketball/')) return 'basketball';
     if (url.includes('/baseball/')) return 'baseball';
     if (url.includes('/hockey/')) return 'hockey';
+    // Sleeper URLs: /draft/nfl/..., /draft/nba/..., etc.
+    if (url.includes('/draft/nba/')) return 'basketball';
+    if (url.includes('/draft/mlb/')) return 'baseball';
+    if (url.includes('/draft/nhl/')) return 'hockey';
     return 'football';
   }
 
@@ -210,16 +233,16 @@
         (detail.currentPick && detail.currentPick.teamId) ||
         null;
 
-      // Resolve bidder name from teams if we got a numeric ID
+      // Resolve bidder name from teams if we got an ID (numeric or string)
       if (
         payload.highBidder &&
-        typeof payload.highBidder === "number" &&
+        (typeof payload.highBidder === "number" || typeof payload.highBidder === "string") &&
         Array.isArray(rawData.teams)
       ) {
         const bidderTeam = rawData.teams.find(
-          (t) => (t.id || t.teamId) === payload.highBidder
+          (t) => String(t.id || t.teamId) === String(payload.highBidder)
         );
-        if (bidderTeam) {
+        if (bidderTeam && (bidderTeam.name || bidderTeam.abbrev)) {
           payload.highBidder =
             bidderTeam.name || bidderTeam.abbrev || payload.highBidder;
         }
@@ -228,7 +251,7 @@
       // Draft log (completed picks)
       if (Array.isArray(detail.picks)) {
         payload.draftLog = detail.picks
-          .filter((pick) => pick.playerId && pick.playerId > 0)
+          .filter((pick) => pick.playerId != null && pick.playerId !== "" && pick.playerId !== 0)
           .map((pick) => ({
             playerId: pick.playerId,
             playerName: resolvePlayerName(pick.playerId, rawData.players),
@@ -256,7 +279,7 @@
       }));
 
       rawData.teams.forEach((team) => {
-        const teamId = team.id || team.teamId;
+        const teamId = String(team.id || team.teamId);
         if (team.roster && team.roster.entries) {
           payload.rosters[teamId] = team.roster.entries.map((entry) => ({
             playerId: entry.playerId,
@@ -283,7 +306,7 @@
     if (!draftDetail || !draftDetail.picks) return 0;
     const teamId = team.id || team.teamId;
     return draftDetail.picks
-      .filter((p) => p.teamId === teamId && p.playerId > 0)
+      .filter((p) => p.teamId === teamId && p.playerId != null && p.playerId !== "" && p.playerId !== 0)
       .reduce((sum, p) => sum + (p.bidAmount || p.price || 0), 0);
   }
 
@@ -377,6 +400,551 @@
         });
       }
     });
+
+    return payload;
+  }
+
+  // =========================================================
+  // SECTION 3b: Sleeper — WebSocket Interceptor & API Extraction
+  // =========================================================
+
+  // In-memory player database cache (Sleeper player_id → player info)
+  let sleeperPlayersCache = null;
+  let sleeperPlayersCacheLoading = false;
+  let sleeperDraftCache = null;
+  let sleeperPicksCache = [];
+
+  // Roster ID → display name mapping (fetched from league users/rosters)
+  let sleeperRosterNames = {};  // roster_id string → display name
+  let sleeperRosterNamesLoaded = false;
+  let sleeperRosterNamesLoading = false;
+  let sleeperLeagueRosters = [];  // Raw roster objects from league API
+
+  // Real-time state captured from Sleeper's WebSocket
+  let sleeperWsNomination = null;   // { player_id, amount, roster_id, ... }
+  let sleeperWsBids = [];           // Recent bid events
+  let sleeperWsLatestBid = null;    // Most recent bid on current nomination
+  let sleeperWsConnected = false;
+  let sleeperWsMessages = [];       // Debug: last N raw messages
+  let sleeperWsSoldQueue = [];      // Picks detected as sold via WS (before REST catches up)
+
+  /**
+   * Intercept Sleeper's WebSocket to capture real-time draft events.
+   * Must be called BEFORE Sleeper's JS connects (runs at document_idle in MAIN world).
+   */
+  function installSleeperWebSocketInterceptor() {
+    const OriginalWebSocket = window.WebSocket;
+
+    window.WebSocket = function (...args) {
+      const ws = new OriginalWebSocket(...args);
+      const url = args[0] || "";
+      console.log("[FAA] WebSocket opened:", url);
+
+      ws.addEventListener("message", (event) => {
+        try {
+          const raw = typeof event.data === "string" ? event.data : null;
+          if (!raw) return;
+
+          // Sleeper sends JSON messages — try to parse
+          const msg = JSON.parse(raw);
+          sleeperWsConnected = true;
+
+          // Keep last 20 messages for debugging
+          sleeperWsMessages.push(msg);
+          if (sleeperWsMessages.length > 20) sleeperWsMessages.shift();
+
+          processSleeperWsMessage(msg);
+        } catch {
+          // Not JSON or parse error — ignore
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        console.log("[FAA] WebSocket closed:", url);
+        sleeperWsConnected = false;
+      });
+
+      return ws;
+    };
+
+    // Preserve prototype chain so instanceof checks still work
+    window.WebSocket.prototype = OriginalWebSocket.prototype;
+    window.WebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
+    window.WebSocket.OPEN = OriginalWebSocket.OPEN;
+    window.WebSocket.CLOSING = OriginalWebSocket.CLOSING;
+    window.WebSocket.CLOSED = OriginalWebSocket.CLOSED;
+
+    console.log("[FAA] Sleeper WebSocket interceptor installed");
+  }
+
+  function processSleeperWsMessage(msg) {
+    // Sleeper WS messages are arrays:
+    //   [null, null, "draft:<id>", "<event_type>", <data_object>]
+    //
+    // Known event types:
+    //   "new_draft_offer"        — a bid/nomination on a player
+    //     data: { user_id, time, slot, player_id, pick_no, roster_id, amount, ... }
+    //   "draft_updated_by_offer" — full draft state update after a bid
+    //     data: { type, status, settings, last_picked, ...,
+    //             player_id, amount, bid_id, roster_id (current highest bidder) }
+    //   "draft_picked"           — player sold / pick finalized
+    //     data: { player_id, roster_id, amount, ... }
+
+    if (!Array.isArray(msg) || msg.length < 4) return;
+
+    const topic = msg[2];     // e.g. "draft:1329266100634584"
+    const eventType = msg[3]; // e.g. "new_draft_offer"
+    const data = msg[4];      // data object (may be undefined for some events)
+
+    // Only process draft-related messages
+    if (typeof topic !== "string" || !topic.startsWith("draft:")) return;
+
+    console.log("[FAA] Sleeper WS event:", eventType, JSON.stringify(data).slice(0, 500));
+
+    if (eventType === "new_draft_offer" && data) {
+      // A new bid or nomination on a player
+      const playerId = data.player_id != null ? String(data.player_id) : null;
+      const amount = parseInt(data.amount, 10) || parseInt(data.metadata?.amount, 10) || 0;
+      // Sleeper may put bidder in roster_id, bid_roster_id, or metadata.roster_id
+      const rosterId = _extractRosterId(data);
+
+      if (playerId) {
+        // If this is a DIFFERENT player than current nomination, the previous was sold
+        if (sleeperWsNomination && sleeperWsNomination.player_id !== playerId && sleeperWsLatestBid) {
+          sleeperWsSoldQueue.push({
+            player_id: sleeperWsNomination.player_id,
+            playerName: sleeperWsNomination.playerName,
+            amount: sleeperWsLatestBid.amount,
+            bidder: sleeperWsLatestBid.bidder,
+          });
+          console.log("[FAA] WS detected sale:", sleeperWsNomination.playerName,
+            "$" + sleeperWsLatestBid.amount, "to roster", sleeperWsLatestBid.bidder);
+        }
+
+        // New nomination (or first bid on same player)
+        if (!sleeperWsNomination || sleeperWsNomination.player_id !== playerId) {
+          sleeperWsNomination = {
+            player_id: playerId,
+            playerName: resolveSleeperPlayerName(data.player_id),
+            nominatingTeamId: rosterId,
+            amount: amount,
+          };
+        }
+        // Always update latest bid
+        sleeperWsLatestBid = {
+          amount: amount,
+          bidder: rosterId,
+        };
+      }
+      return;
+    }
+
+    if (eventType === "draft_updated_by_offer" && data) {
+      // Full draft state after a bid — this often has the current bid info
+      const playerId = data.player_id != null ? String(data.player_id) : null;
+      const amount = parseInt(data.amount, 10) || 0;
+      const rosterId = _extractRosterId(data);
+
+      if (playerId && amount > 0) {
+        // If player changed, the previous nomination was sold
+        if (sleeperWsNomination && sleeperWsNomination.player_id !== playerId && sleeperWsLatestBid) {
+          sleeperWsSoldQueue.push({
+            player_id: sleeperWsNomination.player_id,
+            playerName: sleeperWsNomination.playerName,
+            amount: sleeperWsLatestBid.amount,
+            bidder: sleeperWsLatestBid.bidder,
+          });
+          console.log("[FAA] WS sale (via state update):", sleeperWsNomination.playerName,
+            "$" + sleeperWsLatestBid.amount, "to roster", sleeperWsLatestBid.bidder);
+        }
+
+        if (!sleeperWsNomination || sleeperWsNomination.player_id !== playerId) {
+          sleeperWsNomination = {
+            player_id: playerId,
+            playerName: resolveSleeperPlayerName(data.player_id),
+            nominatingTeamId: rosterId,
+            amount: amount,
+          };
+        }
+        // Update bid — draft_updated_by_offer has authoritative bid state
+        if (rosterId) {
+          sleeperWsLatestBid = {
+            amount: amount,
+            bidder: rosterId,
+          };
+        }
+      }
+      return;
+    }
+
+    if (eventType === "draft_picked" && data) {
+      // Player sold — pick finalized
+      console.log("[FAA] Sleeper pick finalized:", data);
+      // Record the sale if we had a nomination tracked
+      if (sleeperWsNomination && sleeperWsLatestBid) {
+        const soldPlayerId = data.player_id != null ? String(data.player_id) : sleeperWsNomination.player_id;
+        const soldRosterId = _extractRosterId(data) || sleeperWsLatestBid.bidder;
+        const soldAmount = parseInt(data.metadata?.amount, 10) || sleeperWsLatestBid.amount;
+        sleeperWsSoldQueue.push({
+          player_id: soldPlayerId,
+          playerName: resolveSleeperPlayerName(soldPlayerId),
+          amount: soldAmount,
+          bidder: soldRosterId,
+        });
+        console.log("[FAA] WS pick sold:", resolveSleeperPlayerName(soldPlayerId), "$" + soldAmount);
+      }
+      sleeperWsNomination = null;
+      sleeperWsLatestBid = null;
+      return;
+    }
+  }
+
+  function _extractRosterId(data) {
+    // Sleeper uses various field names for the bidding roster
+    let rid = data.roster_id ?? data.bid_roster_id ?? data.metadata?.roster_id ?? null;
+
+    // If no roster_id, try to derive from slot + draft's slot_to_roster_id mapping
+    if (rid == null && data.slot != null && sleeperDraftCache) {
+      const slotMap = sleeperDraftCache.slot_to_roster_id || {};
+      rid = slotMap[String(data.slot)] ?? slotMap[data.slot] ?? null;
+    }
+
+    return rid != null ? String(rid) : null;
+  }
+
+  function parseSleeperDraftId() {
+    // URL pattern: /draft/nfl/<draft_id> or /draft/<draft_id>
+    const match = window.location.pathname.match(/\/draft\/(?:\w+\/)?(\d+)/);
+    return match ? match[1] : null;
+  }
+
+  async function loadSleeperPlayers() {
+    if (sleeperPlayersCache || sleeperPlayersCacheLoading) return;
+    sleeperPlayersCacheLoading = true;
+    try {
+      // Try to load from persisted cache via bridge first
+      const cached = await requestCachedPlayers();
+      if (cached && Object.keys(cached).length > 100) {
+        sleeperPlayersCache = cached;
+        console.log("[FAA] Sleeper player database loaded from cache:", Object.keys(cached).length, "players");
+        sleeperPlayersCacheLoading = false;
+        return;
+      }
+
+      // Fetch from API
+      console.log("[FAA] Fetching Sleeper player database from API...");
+      const resp = await fetch(`${SLEEPER_API_BASE}/players/nfl`);
+      if (resp.ok) {
+        sleeperPlayersCache = await resp.json();
+        console.log("[FAA] Sleeper player database loaded:", Object.keys(sleeperPlayersCache).length, "players");
+        // Persist via bridge for future page loads
+        sendToBridge({ cacheSleeperPlayers: sleeperPlayersCache });
+      }
+    } catch (err) {
+      console.error("[FAA] Failed to load Sleeper players:", err);
+    } finally {
+      sleeperPlayersCacheLoading = false;
+    }
+  }
+
+  function requestCachedPlayers() {
+    return new Promise((resolve) => {
+      const handler = (event) => {
+        if (event.source !== window) return;
+        if (!event.data || event.data.type !== MESSAGE_TYPE) return;
+        if (event.data.direction !== "from-bridge") return;
+        if (event.data.payload?.cachedSleeperPlayers !== undefined) {
+          window.removeEventListener("message", handler);
+          resolve(event.data.payload.cachedSleeperPlayers);
+        }
+      };
+      window.addEventListener("message", handler);
+      sendToBridge({ requestSleeperPlayersCache: true });
+      setTimeout(() => {
+        window.removeEventListener("message", handler);
+        resolve(null);
+      }, 500);
+    });
+  }
+
+  /**
+   * Fetch league users and rosters to build roster_id → display_name mapping.
+   * Returns a promise that resolves when loading is complete.
+   */
+  async function loadSleeperRosterNames(leagueId) {
+    if (!leagueId || sleeperRosterNamesLoaded) return;
+    if (sleeperRosterNamesLoading) {
+      // Wait for the in-flight request to finish
+      while (sleeperRosterNamesLoading) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return;
+    }
+    sleeperRosterNamesLoading = true;
+    try {
+      const [usersResp, rostersResp] = await Promise.all([
+        fetch(`${SLEEPER_API_BASE}/league/${leagueId}/users`),
+        fetch(`${SLEEPER_API_BASE}/league/${leagueId}/rosters`),
+      ]);
+      if (!usersResp.ok || !rostersResp.ok) return;
+
+      const users = await usersResp.json();
+      const rosters = await rostersResp.json();
+
+      // Store raw rosters for team building
+      sleeperLeagueRosters = rosters;
+
+      // Build user_id → display_name
+      const userNames = {};
+      for (const u of users) {
+        userNames[u.user_id] = u.display_name || u.username || `User ${u.user_id}`;
+      }
+
+      // Build roster_id → display_name via roster.owner_id, co_owners, or metadata
+      for (const r of rosters) {
+        const rid = String(r.roster_id);
+        // Try owner first
+        let name = userNames[r.owner_id];
+        // Try co_owners if no owner
+        if (!name && r.co_owners && r.co_owners.length > 0) {
+          name = userNames[r.co_owners[0]];
+        }
+        // Try roster metadata for custom team name
+        if (!name && r.metadata && r.metadata.team_name) {
+          name = r.metadata.team_name;
+        }
+        sleeperRosterNames[rid] = name || `Team ${rid}`;
+      }
+
+      sleeperRosterNamesLoaded = true;
+      console.log("[FAA] Sleeper roster names loaded:", sleeperRosterNames);
+    } catch (err) {
+      console.error("[FAA] Failed to load Sleeper roster names:", err);
+    } finally {
+      sleeperRosterNamesLoading = false;
+    }
+  }
+
+  function resolveSleeperRosterName(rosterId) {
+    if (!rosterId) return null;
+    return sleeperRosterNames[String(rosterId)] || `Team ${rosterId}`;
+  }
+
+  function resolveSleeperPlayerName(playerId) {
+    if (!sleeperPlayersCache || !playerId) return `Player #${playerId}`;
+    const p = sleeperPlayersCache[String(playerId)];
+    if (!p) return `Player #${playerId}`;
+    return p.full_name || `${p.first_name || ""} ${p.last_name || ""}`.trim() || `Player #${playerId}`;
+  }
+
+  function resolveSleeperPlayerPosition(playerId) {
+    if (!sleeperPlayersCache || !playerId) return "UNK";
+    const p = sleeperPlayersCache[String(playerId)];
+    return p ? (p.position || "UNK") : "UNK";
+  }
+
+  async function sleeperExtract() {
+    const draftId = parseSleeperDraftId();
+    if (!draftId) return null;
+
+    // Start loading player DB in background on first call
+    loadSleeperPlayers();
+
+    try {
+      // Fetch draft metadata and picks in parallel
+      const [draftResp, picksResp] = await Promise.all([
+        fetch(`${SLEEPER_API_BASE}/draft/${draftId}`),
+        fetch(`${SLEEPER_API_BASE}/draft/${draftId}/picks`),
+      ]);
+
+      if (!draftResp.ok || !picksResp.ok) return null;
+
+      const draft = await draftResp.json();
+      const picks = await picksResp.json();
+
+      sleeperDraftCache = draft;
+      sleeperPicksCache = picks;
+
+      // Log first pick shape for debugging roster_id resolution
+      if (picks.length > 0 && !window._faaPickLogged) {
+        window._faaPickLogged = true;
+        console.log("[FAA] Sleeper pick sample:", JSON.stringify(picks[0]));
+        console.log("[FAA] Sleeper draft.slot_to_roster_id:", draft.slot_to_roster_id);
+        console.log("[FAA] Sleeper draft.draft_order:", draft.draft_order);
+      }
+
+      // Load roster names from league (once) — await so names are ready for payload
+      if (draft.league_id) {
+        await loadSleeperRosterNames(draft.league_id);
+      }
+
+      return buildSleeperPayload(draft, picks, draftId);
+    } catch (err) {
+      console.error("[FAA] Sleeper API fetch error:", err);
+      return null;
+    }
+  }
+
+  function buildSleeperPayload(draft, picks, draftId) {
+    const draftSettings = draft.settings || {};
+    const budget = draftSettings.budget || 200;
+
+    // Helper: resolve a pick's roster_id using multiple fallbacks
+    function resolvePickRosterId(pick) {
+      if (pick.roster_id != null) return String(pick.roster_id);
+      // Fallback: slot_to_roster_id
+      if (pick.draft_slot != null) {
+        const slotMap = draft.slot_to_roster_id || {};
+        const mapped = slotMap[String(pick.draft_slot)] ?? slotMap[pick.draft_slot];
+        if (mapped != null) return String(mapped);
+      }
+      // Fallback: picked_by (user_id) → roster
+      if (pick.picked_by && sleeperLeagueRosters.length > 0) {
+        const match = sleeperLeagueRosters.find(r => r.owner_id === pick.picked_by);
+        if (match) return String(match.roster_id);
+      }
+      return null;
+    }
+
+    // Build per-roster spending from completed picks
+    const rosterSpending = {}; // roster_id -> total spent
+    const rosterPicks = {};    // roster_id -> [picks]
+    for (const pick of picks) {
+      const rid = resolvePickRosterId(pick);
+      if (!rid) continue;  // Skip picks with unresolvable roster
+      const amount = pick.metadata ? parseInt(pick.metadata.amount, 10) || 0 : 0;
+      rosterSpending[rid] = (rosterSpending[rid] || 0) + amount;
+      if (!rosterPicks[rid]) rosterPicks[rid] = [];
+      rosterPicks[rid].push(pick);
+    }
+    // Include WS-detected sales not yet in REST picks
+    const restPlayerIds = new Set(picks.filter(p => p.player_id).map(p => String(p.player_id)));
+    for (const sold of sleeperWsSoldQueue) {
+      if (!restPlayerIds.has(sold.player_id) && sold.bidder) {
+        const rid = sold.bidder;
+        rosterSpending[rid] = (rosterSpending[rid] || 0) + (sold.amount || 0);
+      }
+    }
+
+    // Build teams — merge all sources to ensure every roster slot is covered.
+    // Sources: league rosters API, slot_to_roster_id, draft_order, and picks.
+    const teams = [];
+    const seenRosters = new Set();
+
+    function addTeam(rid) {
+      rid = String(rid);
+      if (seenRosters.has(rid)) return;
+      seenRosters.add(rid);
+      const spent = rosterSpending[rid] || 0;
+      const teamPicks = rosterPicks[rid] || [];
+      teams.push({
+        teamId: rid,
+        name: resolveSleeperRosterName(rid),
+        abbrev: null,
+        totalBudget: budget,
+        remainingBudget: budget - spent,
+        rosterSize: teamPicks.length,
+      });
+    }
+
+    // 1) League rosters API (has all human-owned rosters)
+    for (const r of sleeperLeagueRosters) {
+      addTeam(r.roster_id);
+    }
+
+    // 2) slot_to_roster_id from draft metadata (maps every draft slot to a roster)
+    const slotMap = draft.slot_to_roster_id || {};
+    for (const rid of Object.values(slotMap)) {
+      addTeam(rid);
+    }
+
+    // 3) draft_order (may have additional mappings)
+    const draftOrder = draft.draft_order || {};
+    for (const rid of Object.values(draftOrder)) {
+      addTeam(rid);
+    }
+
+    // 4) Any roster_id seen in picks that we haven't covered yet
+    for (const rid of Object.keys(rosterSpending)) {
+      addTeam(rid);
+    }
+
+    // Build draft log from completed picks (REST API)
+    const draftLog = picks
+      .filter(p => p.player_id)
+      .map(p => ({
+        playerId: String(p.player_id),
+        playerName: resolveSleeperPlayerName(p.player_id),
+        teamId: resolvePickRosterId(p),
+        bidAmount: p.metadata ? parseInt(p.metadata.amount, 10) || 0 : 0,
+        keeper: p.is_keeper || false,
+      }));
+
+    // Merge WS-detected sales that REST hasn't picked up yet
+    const restDraftedIds = new Set(draftLog.map(d => d.playerId));
+    for (const sold of sleeperWsSoldQueue) {
+      if (!restDraftedIds.has(sold.player_id)) {
+        draftLog.push({
+          playerId: sold.player_id,
+          playerName: sold.playerName,
+          teamId: sold.bidder, // roster_id of winning bidder
+          bidAmount: sold.amount,
+          keeper: false,
+        });
+      }
+    }
+    // Clean up: remove from queue once REST has caught up
+    sleeperWsSoldQueue = sleeperWsSoldQueue.filter(
+      s => !restDraftedIds.has(s.player_id)
+    );
+
+    // Build rosters from picks (position = player's position from DB)
+    const rosters = {};
+    for (const [rid, teamPicks] of Object.entries(rosterPicks)) {
+      rosters[rid] = teamPicks.map(p => ({
+        playerId: String(p.player_id),
+        playerName: resolveSleeperPlayerName(p.player_id),
+        position: resolveSleeperPlayerPosition(p.player_id),
+        acquisitionType: "DRAFT",
+      }));
+    }
+
+    // Current nomination from WebSocket interceptor (real-time)
+    let currentNomination = null;
+    let currentBid = null;
+    let highBidder = null;
+
+    if (sleeperWsNomination) {
+      currentNomination = {
+        playerId: sleeperWsNomination.player_id,
+        playerName: sleeperWsNomination.playerName,
+        // Send roster_id as nominatingTeamId — backend resolves via teams list
+        nominatingTeamId: sleeperWsNomination.nominatingTeamId,
+      };
+      // Also set highBidder for initial nomination if no separate bid yet
+      if (!sleeperWsLatestBid && sleeperWsNomination.nominatingTeamId) {
+        highBidder = resolveSleeperRosterName(sleeperWsNomination.nominatingTeamId);
+        currentBid = sleeperWsNomination.amount;
+      }
+      if (sleeperWsLatestBid) {
+        currentBid = sleeperWsLatestBid.amount;
+        // Resolve bidder roster_id to display name
+        highBidder = resolveSleeperRosterName(sleeperWsLatestBid.bidder);
+      }
+    }
+
+    const payload = {
+      timestamp: Date.now(),
+      currentNomination,
+      currentBid,
+      highBidder,
+      teams,
+      draftLog,
+      rosters,
+      sport: detectSport(),
+      platform: "sleeper",
+      source: "sleeper-api",
+    };
 
     return payload;
   }
@@ -611,6 +1179,30 @@
         updateOverlayAdvice(`<span style="color:#aaa">Watch list: ${list.length ? list.join(", ") : "(empty)"}</span>`);
         return;
       }
+      // Debug: dump Sleeper WebSocket messages to overlay
+      if (cmd.toLowerCase() === "debug ws") {
+        const msgs = sleeperWsMessages || [];
+        const nom = sleeperWsNomination;
+        const bid = sleeperWsLatestBid;
+        let html = `<b style="color:#2196f3">Sleeper WS Debug</b><br>`;
+        html += `WS Connected: ${sleeperWsConnected}<br>`;
+        html += `Nomination: ${nom ? JSON.stringify(nom) : 'null'}<br>`;
+        html += `Latest bid: ${bid ? JSON.stringify(bid) : 'null'}<br>`;
+        html += `Last ${msgs.length} messages:<br>`;
+        msgs.slice(-5).forEach((m, i) => {
+          // For array messages, show event type and data separately for readability
+          if (Array.isArray(m) && m.length >= 4) {
+            const evtType = m[3] || "?";
+            const evtData = m[4] ? JSON.stringify(m[4]).slice(0, 500) : "null";
+            html += `<span style="font-size:10px;color:#888">[${evtType}] ${evtData}</span><br>`;
+          } else {
+            html += `<span style="font-size:10px;color:#888">${JSON.stringify(m).slice(0, 200)}</span><br>`;
+          }
+        });
+        updateOverlayAdvice(html);
+        console.log("[FAA] WS debug — all messages:", msgs);
+        return;
+      }
 
       updateOverlayAdvice(
         '<span style="color:#aaa">Sending: "' + cmd + '"...</span>'
@@ -623,10 +1215,10 @@
     btn.addEventListener("click", submitManual);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitManual();
-      // Stop ESPN from capturing keystrokes while typing
+      // Stop the draft page from capturing keystrokes while typing
       e.stopPropagation();
     });
-    // Also stop keyup/keypress from bubbling to ESPN
+    // Also stop keyup/keypress from bubbling to the draft page
     input.addEventListener("keyup", (e) => e.stopPropagation());
     input.addEventListener("keypress", (e) => e.stopPropagation());
   }
@@ -657,7 +1249,8 @@
     }
 
     if (payload.currentBid !== null && payload.currentBid !== undefined) {
-      bidEl.textContent = `Current bid: $${payload.currentBid} (Team ${payload.highBidder || "?"})`;
+      const bidderLabel = payload.highBidder || "?";
+      bidEl.textContent = `Current bid: $${payload.currentBid} (${bidderLabel})`;
     } else {
       bidEl.textContent = "";
     }
@@ -802,12 +1395,14 @@
       DEAD_MONEY: "\u{1F4B8}",
       MARKET_SHIFT: "\u{1F4C8}",
     };
-    const html = events.slice(0, 8).map(e => {
+    // Events arrive in chronological order (oldest first) — newest at bottom like a chat
+    const html = events.slice(-8).map(e => {
       const color = TYPE_COLORS[e.event_type] || "#aaa";
       const icon = TYPE_ICONS[e.event_type] || "";
       return `<div style="color:${color};padding:1px 0">${icon} ${e.message}</div>`;
     }).join("");
     el.innerHTML = `<div style="font-weight:600;color:#e94560;margin-bottom:2px;font-size:10px">LIVE TICKER</div>` + html;
+    // Auto-scroll to newest (bottom)
     el.scrollTop = el.scrollHeight;
   }
 
@@ -885,71 +1480,97 @@
     });
   }
 
+  /**
+   * ESPN extraction: React fiber traversal → payload builder → DOM fallback
+   */
+  function espnExtract() {
+    let rawData = null;
+
+    // Strategy 1: __INITIAL_STATE__
+    const initialState = getInitialState();
+    if (initialState && initialState.draftDetail) {
+      rawData = initialState;
+    }
+
+    // Strategy 2: React fiber tree
+    if (!rawData) {
+      const fiberRoot = findReactFiberRoot();
+      if (fiberRoot) {
+        rawData = walkFiberTree(fiberRoot);
+      }
+    }
+
+    // Build payload from React state or fall back to DOM scraping
+    let payload;
+    if (rawData && (rawData.draftDetail || rawData.teams)) {
+      payload = buildDraftPayload(rawData);
+      payload.platform = "espn";
+
+      // One-time debug dump
+      if (!debugDumped && rawData.draftDetail) {
+        debugDumped = true;
+        console.log(
+          "[FAA DEBUG] draftDetail keys:",
+          Object.keys(rawData.draftDetail)
+        );
+        console.log(
+          "[FAA DEBUG] draftDetail snapshot:",
+          JSON.parse(JSON.stringify(rawData.draftDetail, null, 2))
+        );
+        if (rawData.teams && rawData.teams[0]) {
+          console.log(
+            "[FAA DEBUG] first team keys:",
+            Object.keys(rawData.teams[0])
+          );
+        }
+        payload._debug = {
+          draftDetailKeys: Object.keys(rawData.draftDetail),
+          firstTeamKeys: rawData.teams && rawData.teams[0]
+            ? Object.keys(rawData.teams[0])
+            : [],
+        };
+      }
+    } else {
+      payload = scrapeDOMFallback();
+      payload.platform = "espn";
+    }
+
+    return payload;
+  }
+
   function poll() {
-    try {
-      let rawData = null;
+    if (PLATFORM === "sleeper") {
+      // Sleeper: async API-based extraction
+      sleeperExtract().then(payload => {
+        if (!payload) return;
 
-      // Strategy 1: __INITIAL_STATE__
-      const initialState = getInitialState();
-      if (initialState && initialState.draftDetail) {
-        rawData = initialState;
-      }
+        updateOverlayNomination(payload);
 
-      // Strategy 2: React fiber tree
-      if (!rawData) {
-        const fiberRoot = findReactFiberRoot();
-        if (fiberRoot) {
-          rawData = walkFiberTree(fiberRoot);
+        const hash = hashPayload(payload);
+        if (hash !== lastDataHash) {
+          lastDataHash = hash;
+          sendToBridge(payload);
         }
-      }
+      }).catch(err => {
+        console.error("[Fantasy Auction Assistant] Sleeper poll error:", err);
+        updateOverlayStatus(false);
+      });
+    } else {
+      // ESPN: synchronous React fiber / DOM extraction
+      try {
+        const payload = espnExtract();
 
-      // Build payload from React state or fall back to DOM scraping
-      let payload;
-      if (rawData && (rawData.draftDetail || rawData.teams)) {
-        payload = buildDraftPayload(rawData);
+        updateOverlayNomination(payload);
 
-        // One-time debug dump — check Chrome DevTools console to see
-        // the actual property names ESPN uses in draftDetail
-        if (!debugDumped && rawData.draftDetail) {
-          debugDumped = true;
-          console.log(
-            "[FAA DEBUG] draftDetail keys:",
-            Object.keys(rawData.draftDetail)
-          );
-          console.log(
-            "[FAA DEBUG] draftDetail snapshot:",
-            JSON.parse(JSON.stringify(rawData.draftDetail, null, 2))
-          );
-          if (rawData.teams && rawData.teams[0]) {
-            console.log(
-              "[FAA DEBUG] first team keys:",
-              Object.keys(rawData.teams[0])
-            );
-          }
-          // Send debug info to server too
-          payload._debug = {
-            draftDetailKeys: Object.keys(rawData.draftDetail),
-            firstTeamKeys: rawData.teams && rawData.teams[0]
-              ? Object.keys(rawData.teams[0])
-              : [],
-          };
+        const hash = hashPayload(payload);
+        if (hash !== lastDataHash) {
+          lastDataHash = hash;
+          sendToBridge(payload);
         }
-      } else {
-        payload = scrapeDOMFallback();
+      } catch (err) {
+        console.error("[Fantasy Auction Assistant] ESPN poll error:", err);
+        updateOverlayStatus(false);
       }
-
-      // Always update overlay locally
-      updateOverlayNomination(payload);
-
-      // Only POST to server if data changed
-      const hash = hashPayload(payload);
-      if (hash !== lastDataHash) {
-        lastDataHash = hash;
-        sendToBridge(payload);
-      }
-    } catch (err) {
-      console.error("[Fantasy Auction Assistant] Poll error:", err);
-      updateOverlayStatus(false);
     }
   }
 
@@ -958,16 +1579,25 @@
   // =========================================================
 
   function init() {
-    console.log("[Fantasy Auction Assistant] Content script loaded (MAIN world)");
+    console.log(`[Fantasy Auction Assistant] Content script loaded (MAIN world) — platform: ${PLATFORM}`);
     createOverlay();
+
+    // For Sleeper, start loading the player database
+    if (PLATFORM === "sleeper") {
+      loadSleeperPlayers();
+    }
+
     setInterval(poll, POLL_INTERVAL_MS);
     // Request CSS URL from bridge
     sendToBridge({ requestCSS: true });
   }
 
-  if (document.readyState === "complete") {
+  // For Sleeper (document_start), the WebSocket interceptor is already installed above.
+  // Defer DOM-dependent init until the page is ready.
+  if (document.readyState === "complete" || document.readyState === "interactive") {
     init();
   } else {
-    window.addEventListener("load", init);
+    // On document_start, wait for DOMContentLoaded before creating overlay/polling
+    document.addEventListener("DOMContentLoaded", init);
   }
 })();

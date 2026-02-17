@@ -8,8 +8,8 @@ export default function SleeperWatch({ sleepers }) {
           <p className="text-xs opacity-50">No sleeper candidates yet.</p>
         ) : (
           <div className="space-y-1.5 max-h-64 overflow-y-auto">
-            {sleepers.map((s, i) => (
-              <div key={i} className="flex items-center justify-between text-xs bg-base-300 rounded-lg px-3 py-2">
+            {sleepers.map((s) => (
+              <div key={s.player_name} className="flex items-center justify-between text-xs bg-base-300 rounded-lg px-3 py-2">
                 <div className="flex-1 min-w-0">
                   <span className="font-medium">{s.player_name}</span>
                   <span className="badge badge-xs badge-ghost ml-1">{s.position}</span>

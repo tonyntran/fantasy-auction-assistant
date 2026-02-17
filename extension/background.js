@@ -4,7 +4,6 @@
 const SERVER_URL = "http://localhost:8000/draft_update";
 const MANUAL_URL = "http://localhost:8000/manual";
 const HEALTH_URL = "http://localhost:8000/health";
-const HEALTH_INTERVAL_MS = 5000;
 
 // Hardcode fallback tokens here if cookie reading fails.
 // Leave as null to rely on browser cookies.
@@ -12,7 +11,7 @@ const HARDCODED_SWID = null;
 const HARDCODED_ESPN_S2 = null;
 
 // =========================================================
-// Cookie Management
+// Platform Auth Management
 // =========================================================
 
 async function getESPNCookies() {
@@ -34,10 +33,46 @@ async function getESPNCookies() {
     });
     if (espnS2) cookies.espn_s2 = espnS2.value;
   } catch (err) {
-    console.error("[FAA Background] Error reading cookies:", err);
+    console.error("[FAA Background] Error reading ESPN cookies:", err);
   }
 
   return cookies;
+}
+
+function parseSleeperInfoFromUrl(url) {
+  // Extract draft_id from Sleeper URL: /draft/<sport>/<id> or /draft/<id>
+  const match = url && url.match(/\/draft\/(?:\w+\/)?(\d+)/);
+  return {
+    sleeper_draft_id: match ? match[1] : null,
+    sleeper_league_id: null, // League ID not in draft URL; will be resolved from draft API if needed
+  };
+}
+
+async function getPlatformAuth(payload) {
+  // Detect platform from the payload itself
+  const platform = payload && payload.platform;
+
+  if (platform === "sleeper") {
+    // For Sleeper: parse IDs from the active tab URL
+    try {
+      const tabs = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      const activeTab = tabs[0];
+      const sleeperInfo = parseSleeperInfoFromUrl(activeTab?.url);
+      return {
+        sleeper_draft_id: sleeperInfo.sleeper_draft_id,
+        sleeper_league_id: sleeperInfo.sleeper_league_id,
+      };
+    } catch (err) {
+      console.error("[FAA Background] Error getting Sleeper auth:", err);
+      return {};
+    }
+  }
+
+  // Default: ESPN cookies
+  return await getESPNCookies();
 }
 
 // =========================================================
@@ -45,14 +80,11 @@ async function getESPNCookies() {
 // =========================================================
 
 async function sendToServer(payload) {
-  const cookies = await getESPNCookies();
+  const auth = await getPlatformAuth(payload);
 
   const body = {
     ...payload,
-    auth: {
-      swid: cookies.swid || null,
-      espn_s2: cookies.espn_s2 || null,
-    },
+    auth,
   };
 
   const response = await fetch(SERVER_URL, {
@@ -92,12 +124,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true;
   }
-
-  if (message.type === "START_STREAM") {
-    startStreaming(message.playerName, message.bid, sender.tab?.id);
-    sendResponse({ ok: true });
-    return true;
-  }
 });
 
 async function handleDraftUpdate(payload, tabId) {
@@ -118,13 +144,7 @@ async function handleDraftUpdate(payload, tabId) {
           playerValue: serverResponse.playerValue,
           raw: serverResponse,
         },
-      });
-
-      // Start AI streaming if there's an active nomination
-      const nom = payload.currentNomination;
-      if (nom && nom.playerName && tabId) {
-        startStreaming(nom.playerName, payload.currentBid, tabId);
-      }
+      }).catch(() => {});
     }
   } catch (err) {
     // Server unreachable — notify the content script
@@ -189,7 +209,7 @@ async function handleManualOverride(command, tabId) {
 }
 
 // =========================================================
-// Health Monitoring — 5s heartbeat
+// Health Monitoring — uses chrome.alarms (MV3-safe)
 // =========================================================
 
 async function checkHealth() {
@@ -208,7 +228,11 @@ async function checkHealth() {
 async function broadcastToContentScripts(payload) {
   try {
     const tabs = await chrome.tabs.query({
-      url: ["https://fantasy.espn.com/*/draft*"],
+      url: [
+        "https://fantasy.espn.com/*/draft*",
+        "https://sleeper.com/draft/*",
+        "https://sleeper.app/draft/*",
+      ],
     });
     for (const tab of tabs) {
       chrome.tabs
@@ -220,81 +244,12 @@ async function broadcastToContentScripts(payload) {
   }
 }
 
-setInterval(checkHealth, HEALTH_INTERVAL_MS);
-
-// =========================================================
-// SSE Streaming — progressive AI advice
-// =========================================================
-
-let activeStreamController = null;
-
-async function startStreaming(playerName, bid, tabId) {
-  // Abort any existing stream
-  if (activeStreamController) {
-    try { activeStreamController.abort(); } catch {}
-    activeStreamController = null;
+// Use chrome.alarms instead of setInterval — survives service worker restarts
+chrome.alarms.create("healthCheck", { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "healthCheck") {
+    checkHealth();
   }
-
-  const controller = new AbortController();
-  activeStreamController = controller;
-
-  const url = `http://localhost:8000/stream/${encodeURIComponent(playerName)}?bid=${bid || 0}`;
-
-  try {
-    // Notify content script that streaming started
-    if (tabId) {
-      await chrome.tabs.sendMessage(tabId, {
-        type: "SERVER_RESPONSE",
-        payload: { aiStart: true },
-      }).catch(() => {});
-    }
-
-    const resp = await fetch(url, { signal: controller.signal });
-    if (!resp.ok || !resp.body) return;
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === "ai_chunk" && data.text && tabId) {
-              await chrome.tabs.sendMessage(tabId, {
-                type: "SERVER_RESPONSE",
-                payload: { aiChunk: data.text },
-              }).catch(() => {});
-            }
-            if (data.type === "done" && tabId) {
-              await chrome.tabs.sendMessage(tabId, {
-                type: "SERVER_RESPONSE",
-                payload: { aiDone: true },
-              }).catch(() => {});
-            }
-          } catch {
-            // Non-JSON SSE line, skip
-          }
-        }
-      }
-    }
-  } catch (err) {
-    if (err.name !== "AbortError") {
-      console.warn("[FAA] Streaming error:", err);
-    }
-  } finally {
-    if (activeStreamController === controller) {
-      activeStreamController = null;
-    }
-  }
-}
+});
 
 console.log("[Fantasy Auction Assistant] Background service worker loaded");

@@ -1,17 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Fantasy Auction Assistant",
-  "version": "1.0.0",
-  "description": "Bridges ESPN Fantasy Auction Draft room with a local AI assistant server",
+  "version": "1.1.0",
+  "description": "Bridges ESPN and Sleeper Fantasy Auction Draft rooms with a local AI assistant server",
 
   "permissions": [
     "cookies",
-    "activeTab"
+    "activeTab",
+    "storage",
+    "alarms"
   ],
 
   "host_permissions": [
     "https://fantasy.espn.com/*",
     "https://*.espn.com/*",
+    "https://sleeper.com/*",
+    "https://sleeper.app/*",
+    "https://api.sleeper.app/*",
     "http://localhost:8000/*"
   ],
 
@@ -33,10 +38,21 @@
     },
     {
       "matches": [
+        "https://sleeper.com/draft/*",
+        "https://sleeper.app/draft/*"
+      ],
+      "js": ["content.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
         "https://fantasy.espn.com/football/draft*",
         "https://fantasy.espn.com/basketball/draft*",
         "https://fantasy.espn.com/baseball/draft*",
-        "https://fantasy.espn.com/hockey/draft*"
+        "https://fantasy.espn.com/hockey/draft*",
+        "https://sleeper.com/draft/*",
+        "https://sleeper.app/draft/*"
       ],
       "js": ["content-bridge.js"],
       "world": "ISOLATED",
@@ -47,7 +63,11 @@
   "web_accessible_resources": [
     {
       "resources": ["style.css"],
-      "matches": ["https://fantasy.espn.com/*"]
+      "matches": [
+        "https://fantasy.espn.com/*",
+        "https://sleeper.com/*",
+        "https://sleeper.app/*"
+      ]
     }
   ]
 }

@@ -13,16 +13,16 @@ from enum import Enum
 # =====================================================================
 
 class NominationInfo(BaseModel):
-    playerId: Optional[int] = None
+    playerId: Optional[Any] = None  # int for ESPN, str for Sleeper
     playerName: str = "Unknown"
-    nominatingTeamId: Optional[int] = None
+    nominatingTeamId: Optional[Any] = None
 
     class Config:
         extra = "allow"
 
 
 class TeamInfo(BaseModel):
-    teamId: Optional[int] = None
+    teamId: Optional[Any] = None  # int for ESPN, str/int for Sleeper
     name: str = "Unknown"
     abbrev: Optional[str] = None
     totalBudget: int = 200
@@ -34,9 +34,9 @@ class TeamInfo(BaseModel):
 
 
 class DraftLogEntry(BaseModel):
-    playerId: Optional[int] = None
+    playerId: Optional[Any] = None  # int for ESPN, str for Sleeper
     playerName: str = "Unknown"
-    teamId: Optional[int] = None
+    teamId: Optional[Any] = None  # int for ESPN, str/int for Sleeper roster_id
     bidAmount: int = 0
     roundId: Optional[int] = None
     roundPickNumber: Optional[int] = None
@@ -47,9 +47,9 @@ class DraftLogEntry(BaseModel):
 
 
 class RosterEntry(BaseModel):
-    playerId: Optional[int] = None
+    playerId: Optional[Any] = None
     playerName: str = "Unknown"
-    position: Optional[int] = None
+    position: Optional[Any] = None  # int for ESPN slot IDs, str for Sleeper position names
     acquisitionType: Optional[str] = None
 
     class Config:
@@ -57,8 +57,15 @@ class RosterEntry(BaseModel):
 
 
 class AuthInfo(BaseModel):
+    # ESPN
     swid: Optional[str] = None
     espn_s2: Optional[str] = None
+    # Sleeper
+    sleeper_league_id: Optional[str] = None
+    sleeper_draft_id: Optional[str] = None
+
+    class Config:
+        extra = "allow"
 
 
 class DraftUpdate(BaseModel):
@@ -73,6 +80,7 @@ class DraftUpdate(BaseModel):
     auth: Optional[AuthInfo] = None
     source: Optional[str] = None
     sport: Optional[str] = None
+    platform: Optional[str] = None  # "espn" or "sleeper"
 
     class Config:
         extra = "allow"

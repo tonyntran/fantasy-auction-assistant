@@ -62,8 +62,8 @@ class TickerBuffer:
             self.events = self.events[-self.MAX_EVENTS:]
 
     def get_recent(self, n: int = 20) -> list[dict]:
-        """Return the most recent N events as dicts, newest first."""
-        return [e.model_dump() for e in reversed(self.events[-n:])]
+        """Return the most recent N events as dicts, oldest first (chat order)."""
+        return [e.model_dump() for e in self.events[-n:]]
 
     def process_update(self, data: "DraftUpdate"):
         """
@@ -115,6 +115,6 @@ def _resolve_team(team_id, teams) -> str:
     if team_id is None:
         return "Unknown"
     for t in teams:
-        if t.teamId == team_id:
+        if str(t.teamId) == str(team_id):
             return t.name or t.abbrev or f"Team #{team_id}"
     return f"Team #{team_id}"

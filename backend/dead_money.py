@@ -97,7 +97,7 @@ def process_dead_money_alerts(
             message=(
                 f"MARKET SHIFT: Inflation moved {direction} to "
                 f"{state.get_inflation_factor():.3f}x "
-                f"({'+' if direction == 'up' else ''}{inflation_change:.3f})"
+                f"({'+' if direction == 'up' else '-'}{inflation_change:.3f})"
             ),
             details={
                 "pre_inflation": round(pre_sale_inflation, 4),

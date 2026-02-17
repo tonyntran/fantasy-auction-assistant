@@ -18,6 +18,8 @@ class OpponentTracker:
         self.team_budgets: dict[str, int] = {}
         # team_key -> roster_size
         self.team_sizes: dict[str, int] = {}
+        # team_id -> team_name (for correlating with budget display names)
+        self.team_names: dict[str, str] = {}
 
     def update_from_rosters(
         self,
@@ -40,8 +42,9 @@ class OpponentTracker:
             info = team_map.get(team_id_str, {})
             team_name = info.get("name", f"Team #{team_id_str}")
 
-            # Skip my own team
-            if team_name and team_name.lower().strip() == my_team_name.lower().strip():
+            # Skip my own team (my_team_name may be comma-separated aliases)
+            my_aliases = [a.strip().lower() for a in my_team_name.split(",")]
+            if team_name and team_name.lower().strip() in my_aliases:
                 continue
 
             pos_counts: dict[str, int] = {}
@@ -51,13 +54,22 @@ class OpponentTracker:
                 else:
                     pos_id = getattr(entry, "position", None)
 
-                pos = settings.espn_slot_map.get(pos_id, "UNK") if pos_id is not None else "UNK"
+                # Platform-aware position resolution:
+                # Sleeper sends string positions ("QB", "RB", ...); ESPN sends int slot IDs
+                if pos_id is None:
+                    pos = "UNK"
+                elif isinstance(pos_id, str):
+                    # Sleeper: use the slot map to normalize, or use the string directly
+                    pos = settings.sleeper_slot_map.get(pos_id, pos_id)
+                else:
+                    pos = settings.espn_slot_map.get(pos_id, "UNK")
                 # Skip bench/IR — only count starters
                 if pos in ("BENCH", "IR", "UNK"):
                     continue
                 pos_counts[pos] = pos_counts.get(pos, 0) + 1
 
             self.team_rosters[team_id_str] = pos_counts
+            self.team_names[team_id_str] = team_name
 
             if info.get("budget") is not None:
                 self.team_budgets[team_id_str] = info["budget"]
@@ -106,6 +118,7 @@ class OpponentTracker:
             "team_count": len(self.team_rosters),
             "team_rosters": self.team_rosters,
             "team_budgets": self.team_budgets,
+            "team_names": self.team_names,
             "threat_levels": self.get_team_threat_levels(),
         }
 

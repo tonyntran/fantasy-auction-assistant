@@ -28,6 +28,10 @@ def clone_state(state: DraftState) -> DraftState:
     clone.raw_latest = dict(state.raw_latest)
     clone.inflation_history = list(state.inflation_history)
     clone.name_resolver = state.name_resolver  # Share (read-only)
+    clone.newly_drafted = []
+    clone.dead_money_log = []
+    clone.team_aliases = dict(state.team_aliases)
+    clone.resolved_sport = state.resolved_sport
     # Give it a dummy opponent_tracker
     from opponent_model import OpponentTracker
     clone.opponent_tracker = OpponentTracker()
@@ -99,8 +103,6 @@ def simulate_what_if(player_name: str, price: int, state: DraftState) -> dict:
         best_ratio = -1
 
         for ps in sim.get_remaining_players():
-            if ps.is_drafted:
-                continue
             p_pos = ps.projection.position.value
             if needs.get(p_pos, 0) <= 0:
                 continue
@@ -126,7 +128,7 @@ def simulate_what_if(player_name: str, price: int, state: DraftState) -> dict:
         })
         ps.is_drafted = True
         remaining_budget -= pick_cost
-        needs[p_pos] = needs.get(p_pos, 1) - 1
+        needs[p_pos] = needs.get(p_pos, 0) - 1
 
     # Calculate projected total
     projected_total = sum(

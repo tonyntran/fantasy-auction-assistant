@@ -27,6 +27,11 @@ SPORT_PROFILES = {
             0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "DEF", 17: "K",
             20: "BENCH", 21: "IR", 23: "FLEX",
         },
+        "sleeper_slot_map": {
+            "QB": "QB", "RB": "RB", "WR": "WR", "TE": "TE",
+            "K": "K", "DEF": "DEF", "FLEX": "FLEX", "SUPER_FLEX": "SUPERFLEX",
+            "BN": "BENCH", "IR": "IR",
+        },
         "sport_name": "football",
         "position_badges": {
             "QB": "badge-error", "RB": "badge-success", "WR": "badge-info",
@@ -47,6 +52,11 @@ SPORT_PROFILES = {
             0: "PG", 1: "SG", 2: "G", 3: "SF", 4: "PF", 5: "F", 6: "C",
             7: "UTIL", 11: "BENCH", 12: "IR",
         },
+        "sleeper_slot_map": {
+            "PG": "PG", "SG": "SG", "SF": "SF", "PF": "PF", "C": "C",
+            "G": "G", "F": "F", "UTIL": "UTIL",
+            "BN": "BENCH", "IR": "IR",
+        },
         "sport_name": "basketball",
         "position_badges": {
             "PG": "badge-error", "SG": "badge-warning", "SF": "badge-info",
@@ -60,13 +70,24 @@ _FOOTBALL_ELIGIBILITY = SPORT_PROFILES["football"]["slot_eligibility"]
 
 
 class Settings(BaseSettings):
+    # Platform selection: "espn" or "sleeper"
+    platform: str = "espn"
+
     # Sport selection: "football", "basketball", or "auto" (detect from extension URL)
     sport: str = "football"
 
+    # AI provider: "gemini" or "claude"
+    ai_provider: str = "gemini"
+
     # API keys
     gemini_api_key: str = ""
+    anthropic_api_key: str = ""
     espn_swid: str = ""
     espn_s2: str = ""
+
+    # Sleeper-specific configuration
+    sleeper_league_id: str = ""
+    sleeper_draft_id: str = ""
 
     # League configuration
     my_team_name: str = "My Team"
@@ -88,8 +109,9 @@ class Settings(BaseSettings):
     adp_csv_path: str = ""
 
     # AI settings
-    gemini_model: str = "gemini-1.5-flash"
-    ai_timeout_ms: int = 400
+    gemini_model: str = "gemini-2.0-flash"
+    claude_model: str = "claude-haiku-4-5-20251001"
+    ai_timeout_ms: int = 8000
 
     # VORP replacement-level ranks per position — football
     vorp_baseline_qb: int = 11
@@ -142,6 +164,17 @@ class Settings(BaseSettings):
     @property
     def espn_slot_map(self) -> dict[int, str]:
         return self.sport_profile["espn_slot_map"]
+
+    @property
+    def sleeper_slot_map(self) -> dict[str, str]:
+        return self.sport_profile["sleeper_slot_map"]
+
+    @property
+    def slot_map(self) -> dict:
+        """Return the appropriate slot mapping based on the active platform."""
+        if self.platform.lower() == "sleeper":
+            return self.sleeper_slot_map
+        return self.espn_slot_map
 
     @property
     def sport_name(self) -> str:

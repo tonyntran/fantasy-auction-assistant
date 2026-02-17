@@ -13,7 +13,7 @@ export default function TopRemaining({ topRemaining }) {
               <h3 className="text-xs font-bold opacity-50 mb-1">{pos}</h3>
               <ul className="space-y-1">
                 {(topRemaining[pos] || []).map((p, i) => (
-                  <li key={i} className="flex justify-between text-xs">
+                  <li key={p.name} className="flex justify-between text-xs">
                     <span className="truncate mr-2">{p.name}</span>
                     <span className="text-success whitespace-nowrap font-mono">${p.fmv}</span>
                   </li>

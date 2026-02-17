@@ -1,5 +1,5 @@
 /** @type {import('tailwindcss').Config} */
-export default {
+module.exports = {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
@@ -12,23 +12,23 @@ export default {
   plugins: [require('daisyui')],
   daisyui: {
     themes: [
+      "dark",
       {
         draft: {
-          'primary': '#e94560',
-          'secondary': '#0f3460',
-          'accent': '#00c853',
-          'neutral': '#16213e',
-          'base-100': '#1a1a2e',
-          'base-200': '#16213e',
-          'base-300': '#0f3460',
-          'base-content': '#e0e0e0',
-          'info': '#3abff8',
-          'success': '#00c853',
-          'warning': '#ffab00',
-          'error': '#ff1744',
+          "primary": "#e94560",
+          "secondary": "#0f3460",
+          "accent": "#00c853",
+          "neutral": "#16213e",
+          "base-100": "#1a1a2e",
+          "base-200": "#16213e",
+          "base-300": "#0f3460",
+          "base-content": "#e0e0e0",
+          "info": "#3abff8",
+          "success": "#00c853",
+          "warning": "#ffab00",
+          "error": "#ff1744",
         },
       },
     ],
-    darkTheme: 'draft',
   },
 }
