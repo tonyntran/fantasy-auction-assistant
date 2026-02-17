@@ -37,6 +37,26 @@ _RATE_LIMIT_BACKOFF_SECONDS = 60  # wait 60s after a 429
 ai_status: str = "idle"  # "idle" | "ok" | "rate_limited" | "error: ..." | "no_key"
 
 
+def _build_strategy_context() -> str:
+    """Build a strategy description for the AI prompt."""
+    strategy = settings.active_strategy
+    if settings.draft_strategy == "balanced":
+        return ""
+    lines = [f"DRAFT STRATEGY: {strategy['label']}"]
+    lines.append(f"- {strategy['description']}")
+    pos_w = strategy.get("position_weights", {})
+    if pos_w:
+        premiums = ", ".join(f"{p} {w}x" for p, w in pos_w.items())
+        lines.append(f"- Position premiums: {premiums}")
+    else:
+        lines.append("- Position premiums: (none)")
+    tier_w = strategy.get("tier_weights", {})
+    if tier_w:
+        premiums = ", ".join(f"T{t} {w}x" for t, w in tier_w.items())
+        lines.append(f"- Tier premiums: {premiums}")
+    return "\n".join(lines) + "\n"
+
+
 def _build_context(
     player_name: str,
     current_bid: float,
@@ -104,6 +124,19 @@ COMPETITION FOR {pos}:
 - Bidding war risk: {"HIGH — expect overpay" if demand.get('bidding_war_risk') else "LOW — less competition"}
 - Wealthiest opponents: {json.dumps([{"budget": t["budget"], "spending_power": t["spending_power"]} for t in threats])}"""
 
+    # Player news/injury status
+    from player_news import get_player_status
+    news = get_player_status(player_name)
+    news_section = ""
+    if news:
+        news_section = f"\n\nPLAYER NEWS:\n- Status: {news['status']}"
+        if news.get("injury"):
+            news_section += f" ({news['injury']})"
+        if news.get("injury_note"):
+            news_section += f" — {news['injury_note']}"
+        if not news.get("active"):
+            news_section += "\n- WARNING: Player is marked INACTIVE"
+
     # VONA
     vona_note = ""
     if engine.vona and engine.vona > 0:
@@ -132,6 +165,7 @@ MY DRAFT SITUATION:
 - Players I own: {json.dumps(my.players_acquired)}
 - Max I can bid (keeping $1/empty slot): ${my.max_bid}
 
+{_build_strategy_context()}
 ALTERNATIVES — other {pos}s still available:
 {json.dumps(alternatives, indent=2)}
 
@@ -142,7 +176,7 @@ OTHER POSITIONS I STILL NEED:
 MARKET CONTEXT:
 - Inflation: {state.get_inflation_factor():.3f}x (>1 = prices inflated, <1 = bargains likely)
 - Total players remaining: {len(state.get_remaining_players())} of {len(state.players)}
-- Recent sales: {recent_str}
+- Recent sales: {recent_str}{news_section}
 
 ANALYSIS REQUESTED:
 1. Player outlook — is {player_name} projected for a strong 2026 season? Consider any coaching changes, offensive scheme, injury history, or teammate changes that affect their value.

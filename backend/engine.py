@@ -131,6 +131,19 @@ def calculate_need_multiplier(player: PlayerState, state: DraftState) -> float:
     return 1.0
 
 
+def calculate_strategy_multiplier(player: PlayerState, state: DraftState) -> float:
+    """
+    Strategy-based multiplier combining position and tier weights
+    from the active draft strategy profile.
+    """
+    strategy = settings.active_strategy
+    pos = player.projection.position.value
+    tier = player.projection.tier
+    pos_w = strategy["position_weights"].get(pos, 1.0)
+    tier_w = strategy["tier_weights"].get(tier, 1.0)
+    return round(pos_w * tier_w, 3)
+
+
 def calculate_max_bid(my_team: MyTeamState) -> int:
     """Maximum affordable bid = budget - ($1 * remaining empty slots after this pick)."""
     return my_team.max_bid
@@ -165,7 +178,8 @@ def get_engine_advice(
     scarcity = calculate_scarcity_multiplier(player, state)
     need = calculate_need_multiplier(player, state)
     inflation = calculate_inflation(state)
-    adjusted_fmv = round(fmv * scarcity * need, 1)
+    strat_mult = calculate_strategy_multiplier(player, state)
+    adjusted_fmv = round(fmv * scarcity * need * strat_mult, 1)
     budget_max = calculate_max_bid(state.my_team)
     pos = player.projection.position.value
 
@@ -191,6 +205,11 @@ def get_engine_advice(
     elif need == 1.2:
         need_info = f" [Last dedicated {pos} slot — slight urgency premium.]"
 
+    # Strategy context for reasoning
+    strat_info = ""
+    if strat_mult != 1.0:
+        strat_info = f" [Strategy x{strat_mult:.2f}]"
+
     # Decision logic
     effective_max = min(int(adjusted_fmv), budget_max)
 
@@ -199,7 +218,7 @@ def get_engine_advice(
         action = AdviceAction.BUY if vorp > 0 else AdviceAction.PASS
         reasoning = (
             f"FMV: ${adjusted_fmv} (base ${fmv}, scarcity x{scarcity:.2f}, need x{need:.1f}). "
-            f"VORP: {vorp:.1f}. Budget max: ${budget_max}.{need_info}"
+            f"VORP: {vorp:.1f}. Budget max: ${budget_max}.{need_info}{strat_info}"
         )
     elif current_bid > adjusted_fmv * 1.15:
         # Well above value — let it go
@@ -207,7 +226,7 @@ def get_engine_advice(
         overpay_pct = (current_bid / adjusted_fmv - 1) * 100 if adjusted_fmv > 0 else 100
         reasoning = (
             f"Current bid ${int(current_bid)} exceeds adjusted FMV "
-            f"${adjusted_fmv} by {overpay_pct:.0f}%. Let someone else overpay.{need_info}"
+            f"${adjusted_fmv} by {overpay_pct:.0f}%. Let someone else overpay.{need_info}{strat_info}"
         )
     elif current_bid > adjusted_fmv:
         # Slightly over FMV — price enforce
@@ -215,7 +234,7 @@ def get_engine_advice(
         effective_max = min(int(adjusted_fmv * 1.10), budget_max)
         reasoning = (
             f"Bid ${int(current_bid)} is above FMV ${adjusted_fmv} but close. "
-            f"Push price to make the winner overpay. Don't exceed ${effective_max}.{need_info}"
+            f"Push price to make the winner overpay. Don't exceed ${effective_max}.{need_info}{strat_info}"
         )
     elif vorp > 0:
         # At or below value with positive VORP — buy
@@ -223,12 +242,12 @@ def get_engine_advice(
         reasoning = (
             f"${int(current_bid)} is at or below adjusted FMV ${adjusted_fmv} "
             f"(base ${fmv}, scarcity x{scarcity:.2f}, need x{need:.1f}). "
-            f"VORP: {vorp:.1f}. BUY up to ${effective_max}.{need_info}"
+            f"VORP: {vorp:.1f}. BUY up to ${effective_max}.{need_info}{strat_info}"
         )
     else:
         # No VORP value
         action = AdviceAction.PASS
-        reasoning = f"Low VORP ({vorp:.1f}). Not worth pursuing at any price.{need_info}"
+        reasoning = f"Low VORP ({vorp:.1f}). Not worth pursuing at any price.{need_info}{strat_info}"
 
     # VONA context
     if vona_next:
@@ -263,4 +282,5 @@ def get_engine_advice(
         adp_value=adp_val,
         adp_vs_fmv=adp_note,
         opponent_demand=demand,
+        strategy_multiplier=strat_mult,
     )

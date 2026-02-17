@@ -204,6 +204,7 @@ class EngineAdvice(BaseModel):
     adp_value: Optional[float] = None
     adp_vs_fmv: Optional[str] = None
     opponent_demand: Optional[dict] = None
+    strategy_multiplier: float = 1.0
 
 
 class FullAdvice(BaseModel):

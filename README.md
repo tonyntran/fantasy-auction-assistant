@@ -14,6 +14,7 @@ Chrome Extension ──► FastAPI Backend ──► React Dashboard
 - **AI-powered advice** — Gemini 1.5 Flash with full draft context (400ms timeout, engine-only fallback)
 - **BUY / PASS / PRICE_ENFORCE** recommendations with suggested bid amounts
 - **Opponent modeling** — positional needs, bidding war risk, spending power analysis
+- **Draft strategy profiles** — Balanced, Studs & Duds, RB Heavy, WR Heavy, Elite TE — switchable at runtime via dashboard dropdown
 - **Nomination strategy** — budget drain, rival desperation, and bargain snag suggestions
 - **What-if simulator** — project your roster if you win a player at a given price
 - **Post-draft grading** — AI-generated letter grades per position with waiver wire targets
@@ -56,6 +57,7 @@ Key `.env` variables:
 | `LEAGUE_SIZE` | `10` | Number of teams |
 | `BUDGET` | `200` | Starting auction budget per team |
 | `ROSTER_SLOTS` | `QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF` | Roster structure |
+| `DRAFT_STRATEGY` | `balanced` | Draft philosophy: `balanced`, `studs_and_duds`, `rb_heavy`, `wr_heavy`, `elite_te` |
 
 See [OVERVIEW.md](OVERVIEW.md) for the full configuration reference, architecture details, and API documentation.
 

@@ -1,13 +1,20 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import useWebSocket from './useWebSocket'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 export default function useDraftState() {
   const { state: wsState, connected } = useWebSocket()
   const [state, setState] = useState(null)
   const [loading, setLoading] = useState(true)
   const hasWsData = useRef(false)
+
+  const refetch = useCallback(() => {
+    fetch(`${API_BASE}/dashboard/state`)
+      .then((r) => r.json())
+      .then((data) => setState(data))
+      .catch(() => {})
+  }, [])
 
   // Initial fetch
   useEffect(() => {
@@ -31,5 +38,5 @@ export default function useDraftState() {
     }
   }, [wsState])
 
-  return { state, connected, loading }
+  return { state, setState, connected, loading, refetch }
 }

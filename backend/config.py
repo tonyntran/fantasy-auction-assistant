@@ -65,6 +65,43 @@ SPORT_PROFILES = {
     },
 }
 
+# -----------------------------------------------------------------
+# Draft strategy profiles
+# -----------------------------------------------------------------
+
+DRAFT_STRATEGIES = {
+    "balanced": {
+        "label": "Balanced",
+        "description": "No positional bias — pure value drafting",
+        "position_weights": {},
+        "tier_weights": {},
+    },
+    "studs_and_duds": {
+        "label": "Studs & Duds",
+        "description": "Spend big on 2-3 elite players, fill rest at $1",
+        "position_weights": {},
+        "tier_weights": {1: 1.4, 2: 1.15, 3: 0.75, 4: 0.6, 5: 0.5},
+    },
+    "rb_heavy": {
+        "label": "RB Heavy",
+        "description": "Prioritize running backs — pay premium for top RBs",
+        "position_weights": {"RB": 1.3, "QB": 0.9, "WR": 0.95, "TE": 0.9},
+        "tier_weights": {},
+    },
+    "wr_heavy": {
+        "label": "WR Heavy",
+        "description": "Prioritize wide receivers — pay premium for top WRs",
+        "position_weights": {"WR": 1.3, "QB": 0.9, "RB": 0.95, "TE": 0.9},
+        "tier_weights": {},
+    },
+    "elite_te": {
+        "label": "Elite TE",
+        "description": "Pay premium for a top-tier tight end",
+        "position_weights": {"TE": 1.35, "QB": 0.95, "RB": 0.95, "WR": 0.95},
+        "tier_weights": {1: 1.2, 2: 1.1},
+    },
+}
+
 _FOOTBALL_ROSTER_DEFAULT = "QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF"
 _FOOTBALL_ELIGIBILITY = SPORT_PROFILES["football"]["slot_eligibility"]
 
@@ -104,6 +141,9 @@ class Settings(BaseSettings):
     # Multi-source projections (comma-separated CSV paths; empty = use csv_path only)
     csv_paths: str = ""
     projection_weights: str = ""
+
+    # Draft strategy
+    draft_strategy: str = "balanced"
 
     # ADP comparison (path to ADP CSV; empty = disabled)
     adp_csv_path: str = ""
@@ -147,6 +187,10 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------
     # Sport-derived properties
     # -----------------------------------------------------------------
+
+    @property
+    def active_strategy(self) -> dict:
+        return DRAFT_STRATEGIES.get(self.draft_strategy, DRAFT_STRATEGIES["balanced"])
 
     @property
     def sport_profile(self) -> dict:

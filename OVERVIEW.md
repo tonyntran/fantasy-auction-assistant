@@ -37,7 +37,7 @@ fantasy-auction-assistant/
 │   ├── server.py            # FastAPI app — endpoints, WebSocket, SSE streaming
 │   ├── state.py             # Singleton DraftState — tracks all players, teams, rosters
 │   ├── engine.py            # Pure math engine — VORP, FMV, VONA, inflation, scarcity
-│   ├── config.py            # Pydantic settings from .env — roster slots, sport profiles
+│   ├── config.py            # Pydantic settings from .env — roster slots, sport profiles, draft strategies
 │   ├── models.py            # Data models — DraftUpdate, PlayerState, EngineAdvice, etc.
 │   ├── ai_advisor.py        # Gemini 1.5 Flash integration — contextual advice + streaming
 │   ├── projections.py       # Multi-source CSV loader with weighted merging
@@ -69,7 +69,7 @@ fantasy-auction-assistant/
     │   │   ├── useDraftState.js   # Fetches initial state + subscribes to WebSocket
     │   │   └── useWebSocket.js    # Persistent WS with auto-reconnect
     │   └── components/
-    │       ├── Header.jsx         # Connection status, budget, inflation
+    │       ├── Header.jsx         # Connection status, budget, inflation, strategy selector
     │       ├── CurrentAdvice.jsx  # Latest AI/engine recommendation
     │       ├── MyRoster.jsx       # Slot-by-slot roster display
     │       ├── DraftBoard.jsx     # Full player table with filters + search
@@ -113,11 +113,31 @@ All pure math, no I/O. Called on every `/draft_update`.
 | **VONA** | `player.projected_points − next_best_undrafted.projected_points` at the same position. Measures positional scarcity: high VONA = big drop-off if you miss this player. |
 | **Scarcity Multiplier** | Tier-based shortage premium. When 70%+ of a tier is drafted → 1.15×, 85%+ → 1.3×. Applied to FMV. |
 | **Need Multiplier** | Roster fit scoring. 0.0 = no slot (hard PASS), 0.5 = flex-only, 1.0 = starter slot open, 1.2 = last starter slot at that position. |
+| **Strategy Multiplier** | Draft strategy bias combining `position_weight × tier_weight` from the active strategy profile. Adjusts FMV and optimizer VORP/$ ratios. |
 
 The engine combines these into an **action recommendation**:
 - **BUY** — bid ≤ adjusted FMV, positive VORP, open roster slot → suggested bid returned
 - **PASS** — no slot, bid >15% above FMV, or negative VORP
 - **PRICE_ENFORCE** — bid slightly above FMV (up to +10%), worth pushing price up to drain opponent budgets
+
+### Draft Strategy Profiles (`config.py`)
+
+Configurable draft philosophies that bias the entire system — engine advice, optimizer, what-if, nominations, and AI context. Switchable at runtime via `POST /strategy` or the dashboard header dropdown.
+
+| Strategy | Key Idea | Effect |
+|---|---|---|
+| **Balanced** | No bias (default) | All multipliers 1.0 |
+| **Studs & Duds** | Spend 70%+ on 2-3 elite players | T1-T2 boosted, T3+ discounted |
+| **RB Heavy** | Prioritize running backs | RB 1.3×, others slightly reduced |
+| **WR Heavy** | Prioritize wide receivers | WR 1.3×, others slightly reduced |
+| **Elite TE** | Pay premium for a top tight end | TE 1.35×, T1-T2 boosted |
+
+Each strategy defines position weights and tier weights. The combined multiplier `position_weight × tier_weight` is applied to:
+- **Engine advice** — adjusts FMV and action thresholds
+- **Roster optimizer** — biases VORP/$ ratio in greedy fill
+- **What-if simulator** — same VORP/$ bias
+- **Nomination engine** — shifts priority toward/away from strategy positions
+- **AI advisor** — strategy context injected into the prompt
 
 ### AI Advisor (`ai_advisor.py`)
 
@@ -293,7 +313,7 @@ A draggable, resizable panel injected into the ESPN draft page:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Header: connection status │ budget │ inflation │ picks count   │
+│  Header: strategy │ budget │ inflation │ picks │ AI status     │
 ├────────────────┬────────────────┬──────────────┬────────────────┤
 │ CurrentAdvice  │  MyRoster      │ TopRemaining │ ActivityFeed   │
 │ (latest rec)   │  (slot view)   │ (by pos)     │ (live ticker)  │
@@ -327,6 +347,7 @@ Auto-reconnect with 2-second delay on disconnect.
 | `BUDGET` | `200` | Starting auction budget per team |
 | `ROSTER_SLOTS` | `QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF` | Comma-separated roster slots |
 | `SPORT` | `"football"` | `football`, `basketball`, or `auto` |
+| `DRAFT_STRATEGY` | `balanced` | Draft philosophy: `balanced`, `studs_and_duds`, `rb_heavy`, `wr_heavy`, `elite_te` |
 | `CSV_PATH` | `data/sheet_2026.csv` | Player projections file |
 | `CSV_PATHS` | *(none)* | Multi-source: `path1,path2,path3` |
 | `PROJECTION_WEIGHTS` | *(none)* | Weights per source: `0.5,0.3,0.2` |
@@ -346,6 +367,7 @@ Auto-reconnect with 2-second delay on disconnect.
 |---|---|---|
 | `POST` | `/draft_update` | Receive ESPN state from extension, return advice |
 | `POST` | `/manual` | Manual commands: sold, budget, undo, nom, suggest, whatif |
+| `POST` | `/strategy` | Set active draft strategy profile |
 | `GET` | `/advice?player=...` | AI-enhanced advice for a specific player |
 | `GET` | `/health` | Heartbeat for connection monitoring |
 | `GET` | `/opponents` | Opponent positional needs analysis |

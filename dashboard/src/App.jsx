@@ -1,19 +1,29 @@
-import useDraftState from './hooks/useDraftState'
+import useDraftState, { API_BASE } from './hooks/useDraftState'
 import Header from './components/Header'
 import CurrentAdvice from './components/CurrentAdvice'
 import MyRoster from './components/MyRoster'
 import DraftBoard from './components/DraftBoard'
 import TeamOverview from './components/TeamOverview'
-import InflationGraph from './components/InflationGraph'
 import ScarcityHeatMap from './components/ScarcityHeatMap'
 import TopRemaining from './components/TopRemaining'
 import SleeperWatch from './components/SleeperWatch'
 import NominationPanel from './components/NominationPanel'
 import ActivityFeed from './components/ActivityFeed'
 import DeadMoneyAlert from './components/DeadMoneyAlert'
+import VomLeaderboard from './components/VomLeaderboard'
+import RosterOptimizer from './components/RosterOptimizer'
 
 export default function App() {
-  const { state, connected, loading } = useDraftState()
+  const { state, setState, connected, loading, refetch } = useDraftState()
+
+  const setStrategy = async (strategy) => {
+    await fetch(`${API_BASE}/strategy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy })
+    })
+    refetch()
+  }
 
   if (loading) {
     return (
@@ -39,7 +49,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header state={state} connected={connected} />
+      <Header state={state} connected={connected} onStrategyChange={setStrategy} />
 
       <main className="flex-1 p-4 overflow-auto">
         {/* Top row: Advice + Roster + Top Remaining + Ticker + Dead Money */}
@@ -51,23 +61,24 @@ export default function App() {
           <DeadMoneyAlert alerts={state.dead_money_alerts} />
         </div>
 
-        {/* Middle row: Unified Team Budgets & Needs + Scarcity */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        {/* Middle row: Team Overview + VOM Leaderboard + Scarcity */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
           <div className="lg:col-span-2">
             <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} />
           </div>
+          <VomLeaderboard leaderboard={state.vom_leaderboard} />
           <ScarcityHeatMap players={state.players} displayPositions={state.display_positions} />
         </div>
 
-        {/* Next row: Sleeper Watch + Nomination + Inflation */}
+        {/* Next row: Optimizer + Sleeper Watch + Nomination */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <RosterOptimizer optimizer={state.optimizer} />
           <SleeperWatch sleepers={state.sleepers} />
           <NominationPanel nominations={state.nominations} />
-          <InflationGraph history={state.inflation_history} />
         </div>
 
         {/* Draft board: full width */}
-        <DraftBoard players={state.players} positions={state.positions} positionBadges={state.position_badges} />
+        <DraftBoard players={state.players} positions={state.positions} positionBadges={state.position_badges} playerNews={state.player_news} />
 
         {/* Glossary */}
         <div className="card bg-base-200 shadow-md mt-4">
@@ -101,7 +112,7 @@ export default function App() {
                 <span className="font-semibold text-base-content">Dead Money</span> — Overpay amount when a player sells above FMV. This cash is "lost" from the league pool, increasing inflation for remaining players.
               </div>
               <div>
-                <span className="font-semibold text-base-content">Tier</span> — Players grouped by projected output. A tier break between two players means a meaningful drop in expected production.
+                <span className="font-semibold text-base-content">VOM</span> — Value Over Market. Difference between a player's FMV and what they actually sold for. Positive = bargain, negative = overpay.
               </div>
             </div>
           </div>

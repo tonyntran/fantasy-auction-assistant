@@ -70,6 +70,19 @@ def get_nomination_suggestions(state: "DraftState", top_n: int = 5) -> list[dict
                 "priority": round(ps.vorp * 2, 1),
             })
 
+    # Apply strategy-based priority adjustments
+    active = settings.active_strategy
+    for s in suggestions:
+        pos = s["position"]
+        pos_weight = active["position_weights"].get(pos, 1.0)
+        if s["strategy"] in ("BUDGET_DRAIN", "RIVAL_DESPERATION"):
+            # Low weight positions → higher nomination priority (drain rivals on these)
+            s["priority"] *= (2.0 - pos_weight)
+        elif s["strategy"] == "BARGAIN_SNAG":
+            # High weight positions → prioritize these bargains for yourself
+            s["priority"] *= pos_weight
+        s["priority"] = round(s["priority"], 1)
+
     # Deduplicate: keep highest-priority entry per player
     seen = {}
     for s in suggestions:

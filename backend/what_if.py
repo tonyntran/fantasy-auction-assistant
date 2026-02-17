@@ -9,7 +9,7 @@ import copy
 from typing import Optional
 
 from state import DraftState
-from engine import calculate_fmv
+from engine import calculate_fmv, calculate_strategy_multiplier
 from config import settings
 
 
@@ -110,7 +110,8 @@ def simulate_what_if(player_name: str, price: int, state: DraftState) -> dict:
             pick_cost = max(1, int(fmv * 0.8))
             if pick_cost > remaining_budget:
                 continue
-            ratio = ps.vorp / max(pick_cost, 1)
+            strategy_mult = calculate_strategy_multiplier(ps, sim)
+            ratio = (ps.vorp * strategy_mult) / max(pick_cost, 1)
             if ratio > best_ratio:
                 best_ratio = ratio
                 best = (ps, pick_cost)

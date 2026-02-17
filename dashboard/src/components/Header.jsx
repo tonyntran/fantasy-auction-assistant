@@ -1,4 +1,4 @@
-export default function Header({ state, connected }) {
+export default function Header({ state, connected, onStrategyChange }) {
   const budget = state?.my_team?.budget ?? '?'
   const total = state?.my_team?.total_budget ?? '?'
   const inflation = state?.inflation ?? 1
@@ -11,6 +11,18 @@ export default function Header({ state, connected }) {
              title={connected ? 'Connected' : 'Disconnected'} />
       </div>
       <div className="navbar-end gap-4 text-sm">
+        {state?.strategies && (
+          <select
+            className="select select-sm select-bordered"
+            value={state?.strategy || 'balanced'}
+            onChange={(e) => onStrategyChange(e.target.value)}
+            title={state?.strategies?.[state?.strategy]?.description || ''}
+          >
+            {Object.entries(state.strategies).map(([key, s]) => (
+              <option key={key} value={key}>{s.label}</option>
+            ))}
+          </select>
+        )}
         <div className="flex items-center gap-1">
           <span className="opacity-60">Budget:</span>
           <span className="font-bold">${budget}</span>

@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from models import DraftUpdate, FullAdvice
-from config import settings
+from config import settings, DRAFT_STRATEGIES
 from state import DraftState
 from engine import get_engine_advice
 from ai_advisor import get_ai_advice, precompute_advice, ai_status as _ai_status_ref
@@ -29,6 +29,7 @@ from event_store import EventStore
 from projections import load_and_merge_projections
 from ticker import TickerBuffer, TickerEvent, TickerEventType
 from dead_money import process_dead_money_alerts
+import player_news
 
 _start_time = time.time()
 
@@ -64,6 +65,9 @@ async def lifespan(app: FastAPI):
                 player.adp_value = adp_val
                 matched += 1
         print(f"  ADP loaded: {matched}/{len(adp_data)} players matched")
+
+    # Load player news/injury data from Sleeper API
+    await player_news.ensure_loaded()
 
     # Open event store and replay any existing events for crash recovery
     event_store = EventStore()
@@ -546,6 +550,16 @@ async def set_team_aliases(request: dict):
     return {"aliases": state.team_aliases}
 
 
+@app.post("/strategy")
+async def set_strategy(request: dict):
+    """Set the active draft strategy profile."""
+    strategy = request.get("strategy", "balanced")
+    if strategy not in DRAFT_STRATEGIES:
+        return {"status": "error", "message": f"Unknown strategy: {strategy}"}
+    settings.draft_strategy = strategy
+    return {"strategy": strategy, "label": DRAFT_STRATEGIES[strategy]["label"]}
+
+
 @app.get("/opponents")
 async def get_opponents():
     """View opponent positional needs and threat levels."""
@@ -598,6 +612,14 @@ async def grade():
         return result
     # Fallback: engine-only grade
     return _build_engine_grade(state)
+
+
+@app.get("/optimize")
+async def optimize():
+    """Optimal remaining picks given current budget and needs."""
+    from roster_optimizer import get_optimal_plan
+    state = DraftState()
+    return get_optimal_plan(state)
 
 
 @app.get("/dashboard/state")
@@ -739,7 +761,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
                 evt["message"] = evt["message"].replace(orig, alias)
 
     # Current nomination advice (if someone is on the block)
-    # Check AI cache first, fall back to engine-only
+    # Always include both engine_reasoning and ai_reasoning separately
     current_advice = None
     raw_nom = state.raw_latest.get("currentNomination")
     if raw_nom and isinstance(raw_nom, dict) and raw_nom.get("playerName"):
@@ -749,39 +771,40 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         try:
             engine_advice = get_engine_advice(nom_player, nom_bid, state)
 
-            # Try to use cached AI advice if available
+            # Player news for nominated player
+            nom_news = player_news.get_player_status(nom_player)
+
+            # Base advice from engine (always present)
+            current_advice = {
+                "player": nom_player,
+                "current_bid": nom_bid,
+                "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
+                "action": engine_advice.action.value,
+                "max_bid": engine_advice.max_bid,
+                "fmv": engine_advice.fmv,
+                "inflation_rate": round(state.get_inflation_factor(), 3),
+                "engine_reasoning": engine_advice.reasoning,
+                "ai_reasoning": None,
+                "reasoning": engine_advice.reasoning,
+                "vona": engine_advice.vona,
+                "vona_next_player": engine_advice.vona_next_player,
+                "scarcity_multiplier": engine_advice.scarcity_multiplier,
+                "vorp": engine_advice.vorp,
+                "source": "engine",
+                "player_news": nom_news,
+            }
+
+            # Overlay AI advice if cached
             from ai_advisor import _advice_cache, CACHE_TTL_SECONDS
             cache_key = nom_player.lower().strip()
             ai_cached = _advice_cache.get(cache_key)
             if ai_cached and (time.time() - ai_cached[1]) < CACHE_TTL_SECONDS:
                 ai = ai_cached[0]
-                current_advice = {
-                    "player": nom_player,
-                    "current_bid": nom_bid,
-                    "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
-                    "action": ai.action.value,
-                    "max_bid": ai.max_bid,
-                    "fmv": ai.fmv,
-                    "inflation_rate": round(state.get_inflation_factor(), 3),
-                    "reasoning": ai.reasoning,
-                    "vona": engine_advice.vona,
-                    "vona_next_player": engine_advice.vona_next_player,
-                    "source": ai.source,
-                }
-            else:
-                current_advice = {
-                    "player": nom_player,
-                    "current_bid": nom_bid,
-                    "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
-                    "action": engine_advice.action.value,
-                    "max_bid": engine_advice.max_bid,
-                    "fmv": engine_advice.fmv,
-                    "inflation_rate": round(state.get_inflation_factor(), 3),
-                    "reasoning": engine_advice.reasoning,
-                    "vona": engine_advice.vona,
-                    "vona_next_player": engine_advice.vona_next_player,
-                    "source": "engine",
-                }
+                current_advice["action"] = ai.action.value
+                current_advice["max_bid"] = ai.max_bid
+                current_advice["ai_reasoning"] = ai.reasoning
+                current_advice["reasoning"] = ai.reasoning
+                current_advice["source"] = ai.source
         except Exception:
             pass
 
@@ -798,6 +821,29 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         tid = str(t.get("team_id", ""))
         raw_name = opponent_needs.get("team_names", {}).get(tid, tid)
         t["display_name"] = state.apply_alias(raw_name)
+
+    # Player news map for undrafted players with injury info
+    player_news_map = player_news.get_news_for_undrafted(state)
+
+    # VOM (Value Over Market) leaderboard for drafted players
+    vom_leaderboard = []
+    for ps in state.players.values():
+        if ps.is_drafted and ps.draft_price is not None:
+            fmv = calculate_fmv(ps, state)
+            vom = round(fmv - ps.draft_price, 1)
+            vom_leaderboard.append({
+                "player_name": ps.projection.player_name,
+                "position": ps.projection.position.value,
+                "draft_price": ps.draft_price,
+                "fmv": round(fmv, 1),
+                "vom": vom,
+                "drafted_by": state.apply_alias(ps.drafted_by_team),
+            })
+    vom_leaderboard.sort(key=lambda x: x["vom"], reverse=True)
+
+    # Roster optimizer
+    from roster_optimizer import get_optimal_plan
+    optimizer = get_optimal_plan(state)
 
     return {
         "players": players,
@@ -820,6 +866,15 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         "positions": settings.positions,
         "display_positions": settings.display_positions,
         "position_badges": settings.sport_profile.get("position_badges", {}),
+        "vom_leaderboard": vom_leaderboard,
+        "optimizer": optimizer,
+        "player_news": player_news_map,
+        "strategy": settings.draft_strategy,
+        "strategy_label": settings.active_strategy["label"],
+        "strategies": {
+            k: {"label": v["label"], "description": v["description"]}
+            for k, v in DRAFT_STRATEGIES.items()
+        },
     }
 
 
