@@ -57,6 +57,20 @@ def get_sleeper_candidates(state: "DraftState", max_results: int = 10) -> list[d
         # Estimate what they'll actually go for
         estimated_price = max(1, min(5, int(fmv * (1 - constraint_ratio * 0.7))))
 
+        # Build reasoning explaining WHY this player is a sleeper
+        reasons = []
+        if constraint_ratio > 0.3:
+            reasons.append(f"{constrained_teams} of {total_teams} teams are budget-constrained, reducing competition")
+        if ps.vorp > 5:
+            reasons.append(f"Projects {ps.vorp:.1f} pts above replacement but valued at only ${round(fmv, 1)}")
+        elif ps.vorp > 0:
+            reasons.append(f"Solid {ps.vorp:.1f} VORP at a discount price")
+        if ps.projection.tier <= 3:
+            reasons.append(f"Tier {ps.projection.tier} player — similar-tier players went for much more")
+        if estimated_price <= 2:
+            reasons.append(f"Likely to sell for ${estimated_price} as teams run out of cash")
+        reasoning = ". ".join(reasons) + "." if reasons else "Good value relative to remaining budget pressure."
+
         candidates.append({
             "player_name": ps.projection.player_name,
             "position": ps.projection.position.value,
@@ -65,6 +79,7 @@ def get_sleeper_candidates(state: "DraftState", max_results: int = 10) -> list[d
             "tier": ps.projection.tier,
             "estimated_price": estimated_price,
             "sleeper_score": round(sleeper_score, 1),
+            "reasoning": reasoning,
         })
 
     candidates.sort(key=lambda c: c["sleeper_score"], reverse=True)

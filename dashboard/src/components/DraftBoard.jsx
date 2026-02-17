@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-export default function DraftBoard({ players, positions = [], positionBadges = {} }) {
+export default function DraftBoard({ players, positions = [], positionBadges = {}, playerNews = {} }) {
   const [filter, setFilter] = useState('ALL')
   const [search, setSearch] = useState('')
 
@@ -58,6 +58,11 @@ export default function DraftBoard({ players, positions = [], positionBadges = {
                     <span className={p.drafted_by === 'My Team' || p.drafted_by?.toLowerCase() === (import.meta.env.VITE_MY_TEAM || 'my team') ? 'text-primary font-medium' : ''}>
                       {p.name}
                     </span>
+                    {!p.is_drafted && playerNews[p.name] && (
+                      <span className="badge badge-xs badge-warning ml-1" title={`${playerNews[p.name].status}${playerNews[p.name].injury ? ` (${playerNews[p.name].injury})` : ''}`}>
+                        {playerNews[p.name].status}
+                      </span>
+                    )}
                   </td>
                   <td className="text-center">
                     <span className={`badge badge-xs ${positionBadges[p.position] || 'badge-ghost'}`}>
