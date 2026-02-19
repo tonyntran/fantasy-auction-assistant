@@ -1,7 +1,15 @@
+const SEASON_GAMES = 17
+
 export default function MyRoster({ myTeam }) {
   if (!myTeam) return null
   const { roster, slot_types, budget, total_budget, players_acquired } = myTeam
   const totalSpent = players_acquired?.reduce((s, p) => s + p.price, 0) ?? 0
+
+  // Build lookup from players_acquired
+  const pickMap = {}
+  for (const p of (players_acquired || [])) {
+    pickMap[p.name] = p
+  }
 
   // Split roster into starters and bench
   const entries = Object.entries(roster || {})
@@ -14,19 +22,35 @@ export default function MyRoster({ myTeam }) {
     return base === 'BENCH'
   })
 
+  // Totals for starters only
+  const starterPicks = starters
+    .map(([, player]) => player && pickMap[player])
+    .filter(Boolean)
+  const totalStarterPts = starterPicks.reduce((s, p) => s + (p.projected_points || 0), 0)
+  const totalWeeklyPts = totalStarterPts / SEASON_GAMES
+
   const renderSlot = ([slot, player]) => {
     const base = slot_types?.[slot] || slot.replace(/\d+$/, '')
     const label = base === 'BENCH' ? 'BN' : slot
+    const pick = player ? pickMap[player] : null
+    const weeklyPts = pick?.projected_points ? (pick.projected_points / SEASON_GAMES).toFixed(1) : null
+    const ptsDollar = pick?.projected_points && pick.price > 0
+      ? (pick.projected_points / pick.price).toFixed(1)
+      : null
+
     return (
-      <div key={slot} className="flex justify-between">
-        <span className="opacity-50 w-16">{label}</span>
+      <div key={slot} className="flex items-center justify-between">
+        <span className="opacity-50 w-12">{label}</span>
         <span className={`flex-1 ${player ? 'font-medium' : 'opacity-30'}`}>
           {player || '—'}
         </span>
-        {player && players_acquired && (() => {
-          const pick = players_acquired.find(p => p.name === player)
-          return pick ? <span className="opacity-50">${pick.price}</span> : null
-        })()}
+        {pick && (
+          <div className="flex gap-2 text-right whitespace-nowrap">
+            <span className="opacity-40 w-12">{weeklyPts}/wk</span>
+            <span className="opacity-30 w-12">{ptsDollar}/$</span>
+            <span className="opacity-50 w-8 text-right">${pick.price}</span>
+          </div>
+        )}
       </div>
     )
   }
@@ -47,6 +71,9 @@ export default function MyRoster({ myTeam }) {
         <div className="divider my-1" />
         <div className="flex justify-between text-xs opacity-60">
           <span>Spent: ${totalSpent}</span>
+          {starterPicks.length > 0 && (
+            <span className="font-semibold text-base-content">{totalWeeklyPts.toFixed(1)} pts/wk</span>
+          )}
           <span>Remaining: <b className="text-base-content">${budget}</b></span>
         </div>
       </div>

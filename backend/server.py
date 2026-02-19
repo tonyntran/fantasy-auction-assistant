@@ -711,7 +711,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
     """Build a comprehensive state snapshot for the web dashboard."""
     from sleeper_watch import get_sleeper_candidates
     from nomination import get_nomination_suggestions
-    from engine import calculate_fmv
+    from engine import calculate_fmv, get_positional_vona_summary
 
     # All players with status
     players = []
@@ -736,10 +736,23 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
     top_remaining = {}
     for pos in settings.display_positions:
         remaining = state.get_remaining_players(pos)[:5]
-        top_remaining[pos] = [
-            {"name": p.projection.player_name, "fmv": round(calculate_fmv(p, state), 1), "vorp": round(p.vorp, 1)}
-            for p in remaining
-        ]
+        entries = []
+        for i, p in enumerate(remaining):
+            drop_off = None
+            if i < len(remaining) - 1:
+                drop_off = round(p.projection.projected_points - remaining[i + 1].projection.projected_points, 1)
+            entries.append({
+                "name": p.projection.player_name,
+                "fmv": round(calculate_fmv(p, state), 1),
+                "vorp": round(p.vorp, 1),
+                "drop_off": drop_off,
+            })
+        # Flag tier breaks: drop-off > 1.5x the average gap in this group
+        gaps = [e["drop_off"] for e in entries if e["drop_off"] is not None and e["drop_off"] > 0]
+        avg_gap = sum(gaps) / len(gaps) if gaps else 0
+        for e in entries:
+            e["tier_break"] = e["drop_off"] is not None and avg_gap > 0 and e["drop_off"] > avg_gap * 1.5
+        top_remaining[pos] = entries
 
     # Apply team aliases to ticker events
     ticker_events = TickerBuffer().get_recent(20)
@@ -764,6 +777,10 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
             # Player news for nominated player
             nom_news = player_news.get_player_status(nom_player)
 
+            # Look up the player object for extra fields
+            nom_player_obj = state.get_player(nom_player)
+            nom_pos = nom_player_obj.projection.position.value if nom_player_obj else None
+
             # Base advice from engine (always present)
             current_advice = {
                 "player": nom_player,
@@ -772,6 +789,8 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
                 "action": engine_advice.action.value,
                 "max_bid": engine_advice.max_bid,
                 "fmv": engine_advice.fmv,
+                "base_fmv": engine_advice.base_fmv,
+                "baseline_aav": nom_player_obj.projection.baseline_aav if nom_player_obj else None,
                 "inflation_rate": round(state.get_inflation_factor(), 3),
                 "engine_reasoning": engine_advice.reasoning,
                 "ai_reasoning": None,
@@ -781,6 +800,10 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
                 "scarcity_multiplier": engine_advice.scarcity_multiplier,
                 "strategy_multiplier": engine_advice.strategy_multiplier,
                 "vorp": engine_advice.vorp,
+                "vorp_per_game": round(engine_advice.vorp / settings.season_games, 1) if engine_advice.vorp else 0,
+                "vorp_replacement_player": state.replacement_player.get(nom_pos) if nom_pos else None,
+                "vona_per_game": round(engine_advice.vona / settings.season_games, 1) if engine_advice.vona else 0,
+                "surplus_value": round(engine_advice.fmv - nom_bid, 1) if nom_bid > 0 and engine_advice.fmv else None,
                 "adp_vs_fmv": engine_advice.adp_vs_fmv,
                 "opponent_demand": engine_advice.opponent_demand,
                 "source": "engine",
@@ -824,12 +847,14 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         if ps.is_drafted and ps.draft_price is not None:
             fmv = calculate_fmv(ps, state)
             vom = round(fmv - ps.draft_price, 1)
+            par_dollar = round(ps.vorp / ps.draft_price, 2) if ps.draft_price > 0 else None
             vom_leaderboard.append({
                 "player_name": ps.projection.player_name,
                 "position": ps.projection.position.value,
                 "draft_price": ps.draft_price,
                 "fmv": round(fmv, 1),
                 "vom": vom,
+                "par_dollar": par_dollar,
                 "drafted_by": state.apply_alias(ps.drafted_by_team),
             })
     vom_leaderboard.sort(key=lambda x: x["vom"], reverse=True)
@@ -837,6 +862,84 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
     # Roster optimizer
     from roster_optimizer import get_optimal_plan
     optimizer = get_optimal_plan(state)
+
+    # --- Position price tracking: actual price vs FMV per position ---
+    pos_price_data: dict[str, dict] = {}
+    for ps in state.players.values():
+        if ps.is_drafted and ps.draft_price is not None:
+            pos = ps.projection.position.value
+            if pos not in pos_price_data:
+                pos_price_data[pos] = {"total_paid": 0, "total_fmv": 0, "count": 0}
+            pos_price_data[pos]["total_paid"] += ps.draft_price
+            pos_price_data[pos]["total_fmv"] += calculate_fmv(ps, state)
+            pos_price_data[pos]["count"] += 1
+    positional_prices = {}
+    for pos in settings.display_positions:
+        d = pos_price_data.get(pos)
+        if d and d["total_fmv"] > 0:
+            pct = round(d["total_paid"] / d["total_fmv"] * 100)
+            positional_prices[pos] = {"pct_of_fmv": pct, "count": d["count"]}
+        else:
+            positional_prices[pos] = {"pct_of_fmv": 100, "count": 0}
+
+    # --- Positional run detection: 3+ consecutive same-position sales above FMV ---
+    positional_run = None
+    if len(state.draft_log) >= 3:
+        # Walk backwards through draft log to find runs
+        run_pos = None
+        run_count = 0
+        run_above_fmv = 0
+        for entry in reversed(state.draft_log[-6:]):
+            name = entry.get("playerName", "")
+            ps = state.get_player(name)
+            if not ps:
+                break
+            pos = ps.projection.position.value
+            price = entry.get("bidAmount", 0)
+            if run_pos is None:
+                run_pos = pos
+                run_count = 1
+                if price > calculate_fmv(ps, state):
+                    run_above_fmv = 1
+            elif pos == run_pos:
+                run_count += 1
+                if price > calculate_fmv(ps, state):
+                    run_above_fmv += 1
+            else:
+                break
+        if run_count >= 3:
+            avg_pct = positional_prices.get(run_pos, {}).get("pct_of_fmv", 100)
+            positional_run = {
+                "position": run_pos,
+                "consecutive": run_count,
+                "above_fmv_count": run_above_fmv,
+                "avg_pct_of_fmv": avg_pct,
+            }
+
+    # --- Money velocity: league spending rate ---
+    total_drafted = sum(1 for ps in state.players.values() if ps.is_drafted)
+    total_players = len(state.players)
+    total_spent = sum(
+        ps.draft_price for ps in state.players.values()
+        if ps.is_drafted and ps.draft_price is not None
+    )
+    total_league_budget = settings.league_size * settings.budget
+    draft_pct = round(total_drafted / total_players * 100, 1) if total_players else 0
+    spend_pct = round(total_spent / total_league_budget * 100, 1) if total_league_budget else 0
+    # Velocity: if spend_pct > draft_pct, money is flowing fast (expensive early picks)
+    # Predict bargain zone: when velocity drops below 1.0
+    velocity = round(spend_pct / draft_pct, 2) if draft_pct > 0 else 1.0
+    avg_price = round(total_spent / total_drafted, 1) if total_drafted else 0
+    money_velocity = {
+        "total_spent": total_spent,
+        "total_budget": total_league_budget,
+        "spend_pct": spend_pct,
+        "draft_pct": draft_pct,
+        "velocity": velocity,
+        "avg_price": avg_price,
+        "players_drafted": total_drafted,
+        "players_total": total_players,
+    }
 
     return {
         "players": players,
@@ -860,7 +963,11 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         "display_positions": settings.display_positions,
         "position_badges": settings.sport_profile.get("position_badges", {}),
         "vom_leaderboard": vom_leaderboard,
+        "positional_vona": get_positional_vona_summary(state),
         "optimizer": optimizer,
+        "positional_prices": positional_prices,
+        "positional_run": positional_run,
+        "money_velocity": money_velocity,
         "player_news": player_news_map,
         "draft_plan_staleness": draft_plan.get_picks_since_plan(state),
         "strategy": settings.draft_strategy,

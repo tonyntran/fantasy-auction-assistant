@@ -32,6 +32,7 @@ export default function VomLeaderboard({ leaderboard }) {
                     <span className="opacity-40">${p.draft_price}</span>
                     <span className="opacity-50">FMV ${p.fmv}</span>
                     <span className="text-success font-semibold font-mono">+{p.vom}</span>
+                    {p.par_dollar != null && <span className="opacity-40" title="Points Above Replacement per $">{p.par_dollar}/$ </span>}
                   </div>
                 </div>
               ))}
@@ -50,6 +51,7 @@ export default function VomLeaderboard({ leaderboard }) {
                     <span className="opacity-40">${p.draft_price}</span>
                     <span className="opacity-50">FMV ${p.fmv}</span>
                     <span className="text-error font-semibold font-mono">{p.vom}</span>
+                    {p.par_dollar != null && <span className="opacity-40" title="Points Above Replacement per $">{p.par_dollar}/$</span>}
                   </div>
                 </div>
               ))}

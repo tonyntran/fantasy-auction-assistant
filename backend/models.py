@@ -210,6 +210,7 @@ class EngineAdvice(BaseModel):
     action: AdviceAction
     max_bid: int
     fmv: float
+    base_fmv: float = 0.0  # FMV before scarcity/strategy multipliers
     inflation_rate: float
     scarcity_multiplier: float
     vorp: float

@@ -53,8 +53,9 @@ class DraftState:
             slot_types=settings.slot_base_type,
         )
 
-        # Replacement-level points per position
+        # Replacement-level points per position and player names
         self.replacement_level: dict[str, float] = {}
+        self.replacement_player: dict[str, str] = {}  # pos -> player name at baseline rank
 
         # Aggregates (recomputed on each update)
         self.total_remaining_aav: float = 0.0
@@ -181,17 +182,26 @@ class DraftState:
     # -----------------------------------------------------------------
 
     def _compute_replacement_levels(self):
-        """For each position, find the Nth-ranked player's projected points."""
-        by_position: dict[str, list[float]] = {}
+        """For each position, compute smoothed replacement level.
+        Averages ranks N-1, N, N+1 to prevent a single outlier projection
+        from skewing the entire position's VORP values."""
+        by_position: dict[str, list[tuple[float, str]]] = {}
         for ps in self.players.values():
             pos = ps.projection.position.value
-            by_position.setdefault(pos, []).append(ps.projection.projected_points)
+            by_position.setdefault(pos, []).append(
+                (ps.projection.projected_points, ps.projection.player_name)
+            )
 
-        for pos, points_list in by_position.items():
-            points_list.sort(reverse=True)
+        for pos, entries in by_position.items():
+            entries.sort(reverse=True, key=lambda x: x[0])
             baseline_rank = settings.vorp_baselines.get(pos, 1)
-            idx = min(baseline_rank - 1, len(points_list) - 1)
-            self.replacement_level[pos] = points_list[idx]
+            idx = min(baseline_rank - 1, len(entries) - 1)
+            # Smooth: average ranks N-1, N, N+1
+            lo = max(0, idx - 1)
+            hi = min(len(entries) - 1, idx + 1)
+            smooth_pts = sum(entries[i][0] for i in range(lo, hi + 1)) / (hi - lo + 1)
+            self.replacement_level[pos] = round(smooth_pts, 2)
+            self.replacement_player[pos] = entries[idx][1]
 
     def _compute_vorps(self):
         """Pre-compute VORP for every player."""
@@ -365,6 +375,7 @@ class DraftState:
                 "name": entry.playerName,
                 "position": pos,
                 "price": entry.bidAmount,
+                "projected_points": ps.projection.projected_points,
             }
         )
 

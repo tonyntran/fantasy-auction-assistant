@@ -16,6 +16,7 @@ SPORT_PROFILES = {
         "positions": ["QB", "RB", "WR", "TE", "K", "DEF"],
         "display_positions": ["QB", "RB", "WR", "TE"],
         "default_roster_slots": "QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF",
+        "season_games": 17,
         "slot_eligibility": {
             "QB": ["QB"], "RB": ["RB"], "WR": ["WR"], "TE": ["TE"],
             "K": ["K"], "DEF": ["DEF"],
@@ -43,6 +44,7 @@ SPORT_PROFILES = {
         "positions": ["PG", "SG", "SF", "PF", "C"],
         "display_positions": ["PG", "SG", "SF", "PF", "C"],
         "default_roster_slots": "PG,SG,G,SF,PF,F,C,UTIL,UTIL,UTIL",
+        "season_games": 82,
         "slot_eligibility": {
             "PG": ["PG"], "SG": ["SG"], "SF": ["SF"], "PF": ["PF"], "C": ["C"],
             "G": ["PG", "SG"], "F": ["SF", "PF"],
@@ -224,6 +226,10 @@ class Settings(BaseSettings):
     @property
     def sport_name(self) -> str:
         return self.sport_profile["sport_name"]
+
+    @property
+    def season_games(self) -> int:
+        return self.sport_profile.get("season_games", 17)
 
     # -----------------------------------------------------------------
     # Roster parsing

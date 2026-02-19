@@ -82,6 +82,7 @@ export default function RosterOptimizer({ optimizer, planStaleness }) {
               </div>
               <div className="flex gap-2 text-right whitespace-nowrap">
                 <span className="opacity-50">VORP {p.vorp}</span>
+                {p.estimated_price > 0 && <span className="opacity-40">{(p.vorp / p.estimated_price).toFixed(1)}/$</span>}
                 <span className="text-success font-mono">~${p.estimated_price}</span>
               </div>
             </div>

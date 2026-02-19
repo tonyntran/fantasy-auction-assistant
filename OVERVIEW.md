@@ -73,15 +73,15 @@ fantasy-auction-assistant/
     │   │   ├── useDraftState.js   # Fetches initial state + subscribes to WebSocket
     │   │   └── useWebSocket.js    # Persistent WS with auto-reconnect
     │   └── components/
-    │       ├── Header.jsx          # Connection status, budget, inflation, strategy selector
-    │       ├── CurrentAdvice.jsx   # Latest AI/engine recommendation with player news
-    │       ├── MyRoster.jsx        # Slot-by-slot roster display (starters + bench)
+    │       ├── Header.jsx          # Strategy selector, position price chips, run alert, budget, inflation
+    │       ├── CurrentAdvice.jsx   # AI/engine rec with FMV/VORP/VONA/surplus/PAR$ + news
+    │       ├── MyRoster.jsx        # Roster with pts/wk, pts/$, and team total pts/wk
     │       ├── DraftBoard.jsx      # Full player table with filters, search, and news badges
-    │       ├── TeamOverview.jsx    # All-team budget comparison + opponent needs
+    │       ├── TeamOverview.jsx    # All-team budgets + opponent needs + money velocity tracker
     │       ├── ScarcityHeatMap.jsx # Position/tier supply remaining
-    │       ├── TopRemaining.jsx    # Top undrafted per position
-    │       ├── RosterOptimizer.jsx # Optimal picks + AI draft plan with staleness tracking
-    │       ├── VomLeaderboard.jsx  # Value Over Market — biggest bargains and overpays
+    │       ├── TopRemaining.jsx    # Top undrafted w/ VORP, cross-pos VONA, tier breaks, news
+    │       ├── RosterOptimizer.jsx # Optimal picks with PAR/$ + AI draft plan
+    │       ├── VomLeaderboard.jsx  # Value Over Market — bargains/overpays with PAR/$
     │       ├── NominationPanel.jsx # Strategic nomination suggestions
     │       ├── SleeperWatch.jsx    # Late-draft bargain candidates
     │       └── ActivityFeed.jsx    # Live ticker event stream
@@ -109,13 +109,18 @@ All pure math, no I/O. Called on every `/draft_update`.
 
 | Metric | What It Does |
 |---|---|
-| **VORP** | `projected_points − replacement_level_points`. Replacement level = Nth-ranked player at that position (configurable via `VORP_BASELINE_*`). |
-| **FMV** | `BaselineAAV × inflation`. The inflation-adjusted "true" price of a player right now. |
+| **VORP** | `projected_points − replacement_level_points`. Replacement level = smoothed average of ranks N−1, N, N+1 at that position (configurable via `VORP_BASELINE_*`). Displayed as both season total and per-game. |
+| **FMV** | `BaselineAAV × inflation`. The inflation-adjusted "true" price of a player right now. Dashboard shows both base FMV and adjusted FMV (after scarcity/strategy multipliers). |
+| **Baseline AAV** | Raw pre-inflation auction value from projections CSV. Shown alongside FMV for context. |
 | **Inflation** | `total_remaining_cash / total_remaining_AAV` across all undrafted players. Starts near 1.0, climbs as money pools shrink slower than player supply. |
-| **VONA** | `player.projected_points − next_best_undrafted.projected_points` at the same position. Measures positional scarcity: high VONA = big gap — don't let this player slip. |
+| **VONA** | `player.projected_points − next_best_undrafted.projected_points` at the same position. Measures positional scarcity: high VONA = big gap — don't let this player slip. Displayed as season + per-game. |
+| **Cross-Positional VONA** | Per-game VONA of the #1 remaining player at each position, sorted by urgency. Shows which position has the steepest drop-off right now. |
+| **Surplus Value** | `FMV − current_bid` during active bidding. Positive = value, negative = overpay. |
+| **PAR/$** | Points Above Replacement per Dollar (`VORP / price`). Measures dollar efficiency. Shown in CurrentAdvice, VOM leaderboard, and roster optimizer. |
 | **Scarcity Multiplier** | Tier-based shortage premium. When 50%+ of a tier is drafted → 1.05×, 70%+ → 1.15×, 85%+ → 1.3×. Applied to FMV. |
 | **Need Multiplier** | Binary roster fit: 1.0 = starter slot open, 0.0 = only bench or no slot. BENCH slots don't drive bidding — bench is filled at $1 at the end. |
 | **Strategy Multiplier** | Draft strategy bias: `position_weight × tier_weight` from the active profile. Adjusts FMV and optimizer VORP/$ ratios. |
+| **Drop-Off / Tier Breaks** | Detects large gaps between consecutive remaining players at each position. Flags tier breaks where the gap exceeds 1.5× the average — signals "get this player before the cliff." |
 
 The engine produces two FMV values:
 - **Adjusted FMV** = `FMV × scarcity × need × strategy` — used for bid logic (whether to buy or pass)
@@ -227,7 +232,24 @@ Identifies end-of-draft bargain targets ($1–3 players):
 
 ### Player News (`player_news.py`)
 
-Fetches injury and status data from the Sleeper player database API. Cached for 30 minutes. Surfaces injury designations, status changes, and news blurbs on the draft board and current advice panel.
+Fetches player context from the Sleeper player database API. Cached for 30 minutes. Provides:
+- Injury designations (Out, IR, Questionable, Doubtful)
+- Team and depth chart position
+- Recent news activity flags (within 72 hours)
+- Active/inactive status
+- Readable summary sentences
+
+Surfaces in CurrentAdvice (nominated player), TopRemaining (badges + horizontal news ticker with click-to-expand detail), and DraftBoard (inline badges).
+
+### Market Analytics (computed in `server.py` snapshot)
+
+Real-time market intelligence derived from draft activity:
+
+| Feature | What It Does |
+|---|---|
+| **Position Price Tracking** | Per-position actual-price-vs-FMV ratio. Shows which positions are running hot (RB 118%) or cold (WR 87%). Displayed as chips in the header nav bar. |
+| **Positional Run Detection** | Detects 3+ consecutive picks at the same position. Triggers an animated alert in the header and a context tag in CurrentAdvice. Signals inflated prices — consider patience. |
+| **Money Velocity Tracker** | `spend_pct / draft_pct` — if money is being spent faster than players are being drafted, velocity > 1.0. Shown in TeamOverview with color-coded labels (Hot / Above pace / Normal / Cold) plus avg $/player and total spend stats. |
 
 ### Live Ticker (`ticker.py`)
 
@@ -328,7 +350,7 @@ A panel injected into the draft page with inline styles:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  Header: strategy selector │ budget │ inflation │ picks │ AI status          │
+│  Header: strategy │ pos prices (QB 105% RB 118%...) │ run alert │ budget │ inflation │
 ├───────────────────┬─────────────────┬──────────────────┬─────────────────────┤
 │ CurrentAdvice     │  TopRemaining   │  ActivityFeed    │ RosterOptimizer     │
 │ (latest rec +     │  (top undrafted │  (live ticker)   │ (optimal picks +    │
@@ -336,7 +358,8 @@ A panel injected into the draft page with inline styles:
 ├───────────────────┼─────────────────┼──────────────────┤  sticky sidebar)    │
 │ MyRoster          │  TeamOverview   │  ScarcityHeatMap │                     │
 │ (starters + bench │  (budgets +     │  (pos/tier grid) │                     │
-│  with separator)  │   opp needs)    │                  │                     │
+│  pts/wk + pts/$)  │   opp needs +   │                  │                     │
+│                   │   velocity)     │                  │                     │
 ├───────────────────┼─────────────────┼──────────────────┤                     │
 │ VomLeaderboard    │  SleeperWatch   │  NominationPanel │                     │
 │ (bargains/overpay)│  (endgame $1-3) │  (nom strategy)  │                     │

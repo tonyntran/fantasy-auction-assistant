@@ -1,7 +1,20 @@
+function PriceChip({ pos, data }) {
+  if (!data || data.count === 0) return null
+  const pct = data.pct_of_fmv
+  const color = pct >= 115 ? 'text-error' : pct >= 105 ? 'text-warning' : pct <= 90 ? 'text-success' : 'opacity-50'
+  return (
+    <span className={`text-[10px] font-mono ${color}`} title={`${pos}: ${data.count} sold at ${pct}% of FMV`}>
+      {pos} {pct}%
+    </span>
+  )
+}
+
 export default function Header({ state, connected, onStrategyChange }) {
   const budget = state?.my_team?.budget ?? '?'
   const total = state?.my_team?.total_budget ?? '?'
   const inflation = state?.inflation ?? 1
+  const prices = state?.positional_prices || {}
+  const run = state?.positional_run
 
   return (
     <div className="navbar bg-base-200 border-b border-base-300 px-6">
@@ -9,6 +22,18 @@ export default function Header({ state, connected, onStrategyChange }) {
         <h1 className="text-lg font-bold text-primary">Fantasy Auction Dashboard</h1>
         <div className={`badge badge-xs ${connected ? 'badge-success' : 'badge-error'}`}
              title={connected ? 'Connected' : 'Disconnected'} />
+      </div>
+      <div className="navbar-center">
+        <div className="flex items-center gap-2">
+          {Object.entries(prices).map(([pos, d]) => (
+            <PriceChip key={pos} pos={pos} data={d} />
+          ))}
+          {run && (
+            <span className="badge badge-xs badge-error animate-pulse" title={`${run.consecutive} consecutive ${run.position} picks, ${run.above_fmv_count} above FMV`}>
+              {run.position} RUN x{run.consecutive}
+            </span>
+          )}
+        </div>
       </div>
       <div className="navbar-end gap-4 text-sm">
         {state?.strategies && (

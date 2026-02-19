@@ -58,11 +58,25 @@ export default function DraftBoard({ players, positions = [], positionBadges = {
                     <span className={p.drafted_by === 'My Team' || p.drafted_by?.toLowerCase() === (import.meta.env.VITE_MY_TEAM || 'my team') ? 'text-primary font-medium' : ''}>
                       {p.name}
                     </span>
-                    {!p.is_drafted && playerNews[p.name] && (
-                      <span className="badge badge-xs badge-warning ml-1" title={`${playerNews[p.name].status}${playerNews[p.name].injury ? ` (${playerNews[p.name].injury})` : ''}`}>
-                        {playerNews[p.name].status}
-                      </span>
-                    )}
+                    {!p.is_drafted && playerNews[p.name] && (() => {
+                      const news = playerNews[p.name]
+                      return (
+                        <>
+                          {news.team && <span className="opacity-40 text-[10px] ml-1">{news.team}</span>}
+                          {news.injury_status && (
+                            <span className={`badge badge-xs ml-1 ${news.injury_status === 'Out' || news.injury_status === 'IR' ? 'badge-error' : 'badge-warning'}`} title={`${news.injury_status}${news.injury ? ` (${news.injury})` : ''}`}>
+                              {news.injury_status}
+                            </span>
+                          )}
+                          {!news.injury_status && news.recent_news && (
+                            <span className="badge badge-xs badge-info ml-1" title="Recent news — check Sleeper for details">NEW</span>
+                          )}
+                          {!news.active && !news.injury_status && (
+                            <span className="badge badge-xs badge-error ml-1">{news.status || 'Inactive'}</span>
+                          )}
+                        </>
+                      )
+                    })()}
                   </td>
                   <td className="text-center">
                     <span className={`badge badge-xs ${positionBadges[p.position] || 'badge-ghost'}`}>

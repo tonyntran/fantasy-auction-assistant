@@ -55,7 +55,7 @@ function getContextTags(advice) {
   return tags
 }
 
-export default function CurrentAdvice({ advice }) {
+export default function CurrentAdvice({ advice, positionalRun }) {
   return (
     <div className="card bg-base-200 shadow-md">
       <div className="card-body p-4">
@@ -68,6 +68,9 @@ export default function CurrentAdvice({ advice }) {
         {advice && (() => {
           const verdict = getVerdict(advice)
           const tags = getContextTags(advice)
+          if (positionalRun) {
+            tags.push({ label: `${positionalRun.position} run x${positionalRun.consecutive}`, style: 'badge-error' })
+          }
           return (
             <>
               {/* 1. Action + player + max bid */}
@@ -97,12 +100,36 @@ export default function CurrentAdvice({ advice }) {
 
               {/* 3. Stat grid */}
               <div className="grid grid-cols-3 gap-2 mt-2 text-center">
-                <StatCell label="FMV" value={`$${advice.fmv ?? '?'}`} />
-                <StatCell label="VORP" value={advice.vorp ?? '?'} />
-                <StatCell label="VONA" value={advice.vona > 0 ? advice.vona : '—'} sub={advice.vona > 0 && advice.vona_next_player ? `vs ${advice.vona_next_player}` : null} />
-                <StatCell label="Inflation" value={advice.inflation_rate ? `${advice.inflation_rate}x` : '?'} />
-                <StatCell label="Scarcity" value={advice.scarcity_multiplier ? `${advice.scarcity_multiplier}x` : '1.0x'} />
-                <StatCell label="Max Afford" value={`$${advice.max_bid ?? '?'}`} />
+                <StatCell
+                  label="FMV"
+                  value={advice.base_fmv != null && advice.base_fmv !== advice.fmv
+                    ? `$${advice.base_fmv}/$${advice.fmv}`
+                    : `$${advice.fmv ?? '?'}`}
+                  sub={advice.base_fmv != null && advice.base_fmv !== advice.fmv ? 'base / adjusted' : null}
+                />
+                <StatCell
+                  label="VORP"
+                  value={advice.vorp > 0
+                    ? `${(+advice.vorp).toFixed(1)} szn · ${(+(advice.vorp_per_game ?? 0)).toFixed(1)}/gm`
+                    : '—'}
+                  sub={advice.vorp > 0 && advice.vorp_replacement_player ? `vs ${advice.vorp_replacement_player}` : null}
+                />
+                <StatCell
+                  label="VONA"
+                  value={advice.vona > 0
+                    ? `${advice.vona} szn · ${advice.vona_per_game ?? '?'}/gm`
+                    : '—'}
+                  sub={advice.vona > 0 && advice.vona_next_player ? `vs ${advice.vona_next_player}` : null}
+                />
+                <StatCell
+                  label="Surplus"
+                  value={advice.surplus_value != null ? `${advice.surplus_value > 0 ? '+' : ''}$${advice.surplus_value}` : '—'}
+                  sub={advice.current_bid > 0 && advice.vorp > 0
+                    ? `${(advice.vorp / advice.current_bid).toFixed(1)} PAR/$`
+                    : advice.surplus_value != null ? (advice.surplus_value > 0 ? 'value' : 'overpay') : null}
+                />
+                <StatCell label="Inflation" value={advice.inflation_rate ? `${advice.inflation_rate}x` : '?'} sub={advice.scarcity_multiplier > 1 ? `scarcity ${advice.scarcity_multiplier}x` : null} />
+                <StatCell label="AAV" value={`$${advice.baseline_aav ?? '?'}`} sub="pre-inflation" />
               </div>
 
               {/* 4. Context tags */}

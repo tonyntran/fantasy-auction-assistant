@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-export default function TeamOverview({ budgets, myTeam, opponentNeeds }) {
+export default function TeamOverview({ budgets, myTeam, opponentNeeds, moneyVelocity }) {
   const [editing, setEditing] = useState(null)
   const [editValue, setEditValue] = useState('')
 
@@ -143,6 +143,30 @@ export default function TeamOverview({ budgets, myTeam, opponentNeeds }) {
             </tbody>
           </table>
         </div>
+
+        {/* Money velocity tracker */}
+        {moneyVelocity && moneyVelocity.players_drafted > 0 && (() => {
+          const mv = moneyVelocity
+          const velColor = mv.velocity >= 1.3 ? 'text-error' : mv.velocity >= 1.1 ? 'text-warning' : mv.velocity <= 0.85 ? 'text-success' : 'opacity-60'
+          const velLabel = mv.velocity >= 1.3 ? 'Hot — big spending, bargains coming later'
+            : mv.velocity >= 1.1 ? 'Above pace — prices slightly inflated'
+            : mv.velocity <= 0.85 ? 'Cold — bargain zone active'
+            : 'Normal pace'
+          return (
+            <div className="mt-2 pt-2 border-t border-base-300 flex items-center justify-between text-[11px]">
+              <div className="flex items-center gap-3">
+                <span className="opacity-50">Velocity:</span>
+                <span className={`font-mono font-semibold ${velColor}`}>{mv.velocity}x</span>
+                <span className="opacity-40">{velLabel}</span>
+              </div>
+              <div className="flex gap-3 opacity-50">
+                <span>${mv.total_spent} / ${mv.total_budget} spent</span>
+                <span>avg ${mv.avg_price}/player</span>
+                <span>{mv.players_drafted}/{mv.players_total} drafted</span>
+              </div>
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

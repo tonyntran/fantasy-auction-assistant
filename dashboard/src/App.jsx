@@ -58,15 +58,15 @@ export default function App() {
           <div className="lg:col-span-3 space-y-4">
             {/* Row 1: Advice + Top Remaining + Ticker */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <CurrentAdvice advice={state.current_advice} />
-              <TopRemaining topRemaining={state.top_remaining} />
+              <CurrentAdvice advice={state.current_advice} positionalRun={state.positional_run} />
+              <TopRemaining topRemaining={state.top_remaining} playerNews={state.player_news} positionalVona={state.positional_vona} />
               <ActivityFeed events={state.ticker_events} />
             </div>
 
             {/* Row 2: Team Overview + My Roster + Scarcity */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <MyRoster myTeam={state.my_team} />
-              <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} />
+              <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} moneyVelocity={state.money_velocity} />
               <ScarcityHeatMap players={state.players} displayPositions={state.display_positions} />
             </div>
 

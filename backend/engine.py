@@ -36,6 +36,38 @@ def calculate_vona(player: PlayerState, state: DraftState) -> tuple[float, str |
     return (round(max(0.0, player.vorp), 1), None)
 
 
+def get_positional_vona_summary(state: DraftState) -> list[dict]:
+    """Cross-positional VONA: for each display position, compute the VONA
+    of the #1 remaining player. Sorted by per-game VONA descending so the
+    most urgent positional need is first."""
+    from config import settings
+    season_games = settings.season_games
+    results = []
+    for pos in settings.display_positions:
+        remaining = state.get_remaining_players(pos)
+        if len(remaining) < 2:
+            results.append({
+                "position": pos,
+                "top_player": remaining[0].projection.player_name if remaining else None,
+                "vona": 0,
+                "vona_per_game": 0,
+                "next_player": None,
+            })
+            continue
+        top = remaining[0]
+        nxt = remaining[1]
+        vona = round(max(0.0, top.projection.projected_points - nxt.projection.projected_points), 1)
+        results.append({
+            "position": pos,
+            "top_player": top.projection.player_name,
+            "vona": vona,
+            "vona_per_game": round(vona / season_games, 1),
+            "next_player": nxt.projection.player_name,
+        })
+    results.sort(key=lambda x: x["vona_per_game"], reverse=True)
+    return results
+
+
 def calculate_fmv(player: PlayerState, state: DraftState) -> float:
     """
     Fair Market Value adjusted by live inflation.
@@ -277,6 +309,7 @@ def get_engine_advice(
         action=action,
         max_bid=effective_max,
         fmv=display_fmv,
+        base_fmv=fmv,
         inflation_rate=inflation,
         scarcity_multiplier=scarcity,
         vorp=vorp,
