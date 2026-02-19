@@ -5,7 +5,6 @@ const TYPE_BADGE = {
   BID_PLACED: 'badge-ghost',
   PLAYER_SOLD: 'badge-success',
   BUDGET_ALERT: 'badge-warning',
-  DEAD_MONEY: 'badge-error',
   MARKET_SHIFT: 'badge-secondary',
 }
 
@@ -14,18 +13,19 @@ const TYPE_LABEL = {
   BID_PLACED: 'BID',
   PLAYER_SOLD: 'SOLD',
   BUDGET_ALERT: 'ALERT',
-  DEAD_MONEY: 'DEAD$',
   MARKET_SHIFT: 'SHIFT',
 }
 
 export default function ActivityFeed({ events }) {
   const scrollRef = useRef(null)
 
+  const lastTimestamp = events?.[events.length - 1]?.timestamp
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [events?.length])
+  }, [lastTimestamp, events?.length])
 
   if (!events || events.length === 0) {
     return (

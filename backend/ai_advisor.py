@@ -37,8 +37,9 @@ _RATE_LIMIT_BACKOFF_SECONDS = 60  # wait 60s after a 429
 ai_status: str = "idle"  # "idle" | "ok" | "rate_limited" | "error: ..." | "no_key"
 
 
-def _build_strategy_context() -> str:
-    """Build a strategy description for the AI prompt."""
+def _build_strategy_context(player_tier: int = 0) -> str:
+    """Build a strategy description for the AI prompt.
+    When Studs & Steals is active, injects tier-specific guidance."""
     strategy = settings.active_strategy
     if settings.draft_strategy == "balanced":
         return ""
@@ -54,6 +55,14 @@ def _build_strategy_context() -> str:
     if tier_w:
         premiums = ", ".join(f"T{t} {w}x" for t, w in tier_w.items())
         lines.append(f"- Tier premiums: {premiums}")
+
+    # Studs & Steals: inject tier-specific AI guidance
+    if settings.draft_strategy == "studs_and_steals" and player_tier > 0:
+        if player_tier == 1:
+            lines.append("- STRATEGY NOTE: This is an ELITE player. Be aggressive — these are the studs you build your team around. Push to acquire even at slight overpay.")
+        elif player_tier >= 2:
+            lines.append("- STRATEGY NOTE: Evaluate this player as a potential STEAL. Look for upside catalysts: new team/role, coaching scheme changes, injury recovery, breakout trajectory, age-based upside, reduced competition for targets/touches. If below FMV AND has upside catalysts, flag as a steal worth targeting. If just cheap with no upside, it's a pass.")
+
     return "\n".join(lines) + "\n"
 
 
@@ -165,7 +174,7 @@ MY DRAFT SITUATION:
 - Players I own: {json.dumps(my.players_acquired)}
 - Max I can bid (keeping $1/empty slot): ${my.max_bid}
 
-{_build_strategy_context()}
+{_build_strategy_context(player_tier=tier if isinstance(tier, int) else 0)}
 ALTERNATIVES — other {pos}s still available:
 {json.dumps(alternatives, indent=2)}
 

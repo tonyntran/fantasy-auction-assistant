@@ -21,6 +21,7 @@ SPORT_PROFILES = {
             "K": ["K"], "DEF": ["DEF"],
             "FLEX": ["RB", "WR", "TE"],
             "SUPERFLEX": ["QB", "RB", "WR", "TE"],
+            "BENCH": ["QB", "RB", "WR", "TE", "K", "DEF"],
         },
         "vorp_baselines": {"QB": 11, "RB": 30, "WR": 30, "TE": 11, "K": 1, "DEF": 1},
         "espn_slot_map": {
@@ -76,11 +77,11 @@ DRAFT_STRATEGIES = {
         "position_weights": {},
         "tier_weights": {},
     },
-    "studs_and_duds": {
-        "label": "Studs & Duds",
-        "description": "Spend big on 2-3 elite players, fill rest at $1",
+    "studs_and_steals": {
+        "label": "Studs & Steals",
+        "description": "Pay premium for 2-3 elite starters, then hunt steals — players below FMV with upside catalysts",
         "position_weights": {},
-        "tier_weights": {1: 1.4, 2: 1.15, 3: 0.75, 4: 0.6, 5: 0.5},
+        "tier_weights": {1: 1.15, 2: 1.05, 3: 0.92, 4: 0.85, 5: 0.80},
     },
     "rb_heavy": {
         "label": "RB Heavy",

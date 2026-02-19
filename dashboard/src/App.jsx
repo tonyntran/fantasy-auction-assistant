@@ -9,7 +9,7 @@ import TopRemaining from './components/TopRemaining'
 import SleeperWatch from './components/SleeperWatch'
 import NominationPanel from './components/NominationPanel'
 import ActivityFeed from './components/ActivityFeed'
-import DeadMoneyAlert from './components/DeadMoneyAlert'
+
 import VomLeaderboard from './components/VomLeaderboard'
 import RosterOptimizer from './components/RosterOptimizer'
 
@@ -52,29 +52,38 @@ export default function App() {
       <Header state={state} connected={connected} onStrategyChange={setStrategy} />
 
       <main className="flex-1 p-4 overflow-auto">
-        {/* Top row: Advice + Roster + Top Remaining + Ticker + Dead Money */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-4">
-          <CurrentAdvice advice={state.current_advice} />
-          <MyRoster myTeam={state.my_team} />
-          <TopRemaining topRemaining={state.top_remaining} />
-          <ActivityFeed events={state.ticker_events} />
-          <DeadMoneyAlert alerts={state.dead_money_alerts} />
-        </div>
+        {/* Main layout: left content columns + right optimizer sidebar */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4 items-start">
+          {/* Left 3 columns */}
+          <div className="lg:col-span-3 space-y-4">
+            {/* Row 1: Advice + Top Remaining + Ticker */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <CurrentAdvice advice={state.current_advice} />
+              <TopRemaining topRemaining={state.top_remaining} />
+              <ActivityFeed events={state.ticker_events} />
+            </div>
 
-        {/* Middle row: Team Overview + VOM Leaderboard + Scarcity */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
-          <div className="lg:col-span-2">
-            <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} />
+            {/* Row 2: Team Overview + My Roster + Scarcity */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <MyRoster myTeam={state.my_team} />
+              <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} />
+              <ScarcityHeatMap players={state.players} displayPositions={state.display_positions} />
+            </div>
+
+            {/* Row 3: VOM Leaderboard + Sleeper Watch + Nomination */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <VomLeaderboard leaderboard={state.vom_leaderboard} />
+              <SleeperWatch sleepers={state.sleepers} />
+              <NominationPanel nominations={state.nominations} />
+            </div>
           </div>
-          <VomLeaderboard leaderboard={state.vom_leaderboard} />
-          <ScarcityHeatMap players={state.players} displayPositions={state.display_positions} />
-        </div>
 
-        {/* Next row: Optimizer + Sleeper Watch + Nomination */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-          <RosterOptimizer optimizer={state.optimizer} />
-          <SleeperWatch sleepers={state.sleepers} />
-          <NominationPanel nominations={state.nominations} />
+          {/* Right column: Optimizer + AI Plan pinned to top */}
+          <div className="lg:col-span-1">
+            <div className="lg:sticky lg:top-4">
+              <RosterOptimizer optimizer={state.optimizer} planStaleness={state.draft_plan_staleness} />
+            </div>
+          </div>
         </div>
 
         {/* Draft board: full width */}
@@ -107,9 +116,6 @@ export default function App() {
               </div>
               <div>
                 <span className="font-semibold text-base-content">Inflation</span> — Ratio of remaining league cash to remaining player value. Above 1.0 means more cash than value left (prices will rise); below 1.0 means bargains are likely.
-              </div>
-              <div>
-                <span className="font-semibold text-base-content">Dead Money</span> — Overpay amount when a player sells above FMV. This cash is "lost" from the league pool, increasing inflation for remaining players.
               </div>
               <div>
                 <span className="font-semibold text-base-content">VOM</span> — Value Over Market. Difference between a player's FMV and what they actually sold for. Positive = bargain, negative = overpay.

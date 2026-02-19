@@ -29,7 +29,6 @@ def clone_state(state: DraftState) -> DraftState:
     clone.inflation_history = list(state.inflation_history)
     clone.name_resolver = state.name_resolver  # Share (read-only)
     clone.newly_drafted = []
-    clone.dead_money_log = []
     clone.team_aliases = dict(state.team_aliases)
     clone.resolved_sport = state.resolved_sport
     # Give it a dummy opponent_tracker
@@ -71,10 +70,9 @@ def simulate_what_if(player_name: str, price: int, state: DraftState) -> dict:
     sim_player.drafted_by_team = settings.my_team_name
     sim.my_team.budget -= price
 
-    # Slot into roster
+    # Slot into roster (priority: dedicated > flex > bench)
     open_slots = sim.my_team.open_slots_for_position(pos, settings.SLOT_ELIGIBILITY)
     if open_slots:
-        # Prefer dedicated slot
         best_slot = None
         for slot in open_slots:
             base_type = sim.my_team.slot_types.get(slot, slot.rstrip("0123456789"))
@@ -82,16 +80,22 @@ def simulate_what_if(player_name: str, price: int, state: DraftState) -> dict:
                 best_slot = slot
                 break
         if best_slot is None:
+            for slot in open_slots:
+                base_type = sim.my_team.slot_types.get(slot, slot.rstrip("0123456789"))
+                if base_type != "BENCH":
+                    best_slot = slot
+                    break
+        if best_slot is None:
             best_slot = open_slots[0]
         sim.my_team.roster[best_slot] = actual_name
         sim.my_team.players_acquired.append({"name": actual_name, "position": pos, "price": price})
 
     sim._recompute_aggregates()
 
-    # Greedy optimal fill of remaining slots
+    # Greedy optimal fill of remaining starter slots (bench fills at $1)
     optimal_picks = []
-    remaining_budget = sim.my_team.budget
-    needs = sim.get_positional_need()
+    remaining_budget = sim.my_team.budget - sim.my_team.bench_spots_remaining  # reserve $1/bench
+    needs = sim.get_starter_need()
 
     for _ in range(settings.roster_size):  # Safety bound
         if remaining_budget <= 0:

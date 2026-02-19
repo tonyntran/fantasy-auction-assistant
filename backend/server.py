@@ -28,8 +28,9 @@ import ai_advisor as _ai_advisor_mod
 from event_store import EventStore
 from projections import load_and_merge_projections
 from ticker import TickerBuffer, TickerEvent, TickerEventType
-from dead_money import process_dead_money_alerts
+
 import player_news
+import draft_plan
 
 _start_time = time.time()
 
@@ -200,15 +201,12 @@ async def draft_update(data: DraftUpdate):
     if data.sport and state.resolved_sport == "auto":
         state.resolve_sport(data.sport)
 
-    # Capture pre-sale inflation for dead money FMV calculation
-    pre_sale_inflation = state.get_inflation_factor()
-
     # Process ticker events (nominations + bids) before state update
     ticker.process_update(data)
 
     state.update_from_draft_event(data)
 
-    # Process newly drafted players for ticker + dead money
+    # Process newly drafted players for ticker
     for ps in state.newly_drafted:
         from engine import calculate_fmv
         fmv = calculate_fmv(ps, state)
@@ -235,11 +233,9 @@ async def draft_update(data: DraftUpdate):
                     amount=float(team.remainingBudget),
                 ))
 
-    # Dead money detection
-    dead_money_alerts = process_dead_money_alerts(
-        state.newly_drafted, state, pre_sale_inflation
-    )
-    state.dead_money_log.extend(dead_money_alerts)
+    # Invalidate draft plan cache when players are drafted
+    if state.newly_drafted:
+        draft_plan.invalidate_plan()
 
     # Persist event for crash recovery
     EventStore().append("draft_update", data.model_dump())
@@ -264,7 +260,7 @@ async def draft_update(data: DraftUpdate):
         "advice": advice_html,
         "status": "ok",
         "tickerEvents": ticker.get_recent(10),
-        "deadMoneyAlerts": dead_money_alerts,
+        "strategyLabel": settings.active_strategy["label"],
     }
 
     if player_name:
@@ -281,30 +277,16 @@ async def draft_update(data: DraftUpdate):
         advice_html = _format_advice_html(player_name, current_bid, engine_advice)
         print(f"  >> {engine_advice.action.value}: max ${engine_advice.max_bid}, FMV ${engine_advice.fmv}")
 
-        # Build top remaining for overlay
-        from engine import calculate_fmv
-        top_remaining = {}
-        for pos in settings.display_positions:
-            remaining = state.get_remaining_players(pos)[:3]
-            top_remaining[pos] = [
-                {"name": p.projection.player_name, "fmv": round(calculate_fmv(p, state), 1)}
-                for p in remaining
-            ]
-
         response = {
             "advice": advice_html,
             "status": "ok",
             "suggestedBid": engine_advice.max_bid,
             "playerValue": engine_advice.fmv,
-            # Extra data for enhanced overlay
-            "myRoster": {slot: occupant for slot, occupant in state.my_team.roster.items()},
-            "rosterSummary": f"{len(state.my_team.players_acquired)}/{settings.roster_size}",
-            "topRemaining": top_remaining,
             "vona": engine_advice.vona,
             "vonaNextPlayer": engine_advice.vona_next_player,
             "tickerEvents": ticker.get_recent(10),
-            "deadMoneyAlerts": dead_money_alerts,
-        }
+            "strategyLabel": settings.active_strategy["label"],
+            }
 
         # Broadcast full snapshot to WebSocket dashboard clients
         await _broadcast_ws({
@@ -622,6 +604,13 @@ async def optimize():
     return get_optimal_plan(state)
 
 
+@app.get("/draft-plan")
+async def get_draft_plan():
+    """On-demand AI draft plan with strategic spending analysis."""
+    state = DraftState()
+    return await draft_plan.get_ai_draft_plan(state)
+
+
 @app.get("/dashboard/state")
 async def dashboard_state():
     """Full state snapshot for the web dashboard."""
@@ -656,6 +645,7 @@ async def root():
             "GET /whatif?player=<name>&price=<int>": "What-if draft simulation",
             "GET /grade": "Post-draft team grade",
             "GET /stream/{player}?bid={bid}": "SSE streaming AI advice",
+            "GET /draft-plan": "On-demand AI draft plan with spending analysis",
             "GET /dashboard/state": "Full dashboard state snapshot",
             "WS /ws": "WebSocket for real-time updates",
         },
@@ -745,7 +735,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
     # Top remaining by position
     top_remaining = {}
     for pos in settings.display_positions:
-        remaining = state.get_remaining_players(pos)[:3]
+        remaining = state.get_remaining_players(pos)[:5]
         top_remaining[pos] = [
             {"name": p.projection.player_name, "fmv": round(calculate_fmv(p, state), 1), "vorp": round(p.vorp, 1)}
             for p in remaining
@@ -789,7 +779,10 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
                 "vona": engine_advice.vona,
                 "vona_next_player": engine_advice.vona_next_player,
                 "scarcity_multiplier": engine_advice.scarcity_multiplier,
+                "strategy_multiplier": engine_advice.strategy_multiplier,
                 "vorp": engine_advice.vorp,
+                "adp_vs_fmv": engine_advice.adp_vs_fmv,
+                "opponent_demand": engine_advice.opponent_demand,
                 "source": "engine",
                 "player_news": nom_news,
             }
@@ -859,7 +852,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         "opponent_needs": opponent_needs,
         "top_remaining": top_remaining,
         "ticker_events": ticker_events,
-        "dead_money_alerts": state.dead_money_log,
+
         "current_advice": current_advice,
         "ai_status": _ai_advisor_mod.ai_status,
         "sport": settings.sport,
@@ -869,6 +862,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         "vom_leaderboard": vom_leaderboard,
         "optimizer": optimizer,
         "player_news": player_news_map,
+        "draft_plan_staleness": draft_plan.get_picks_since_plan(state),
         "strategy": settings.draft_strategy,
         "strategy_label": settings.active_strategy["label"],
         "strategies": {

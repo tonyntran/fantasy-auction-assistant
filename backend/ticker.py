@@ -1,7 +1,7 @@
 """
 Live Bid Ticker — rolling event buffer for real-time draft activity feed.
 
-Tracks nominations, bids, sales, budget alerts, dead money, and market shifts.
+Tracks nominations, bids, sales, budget alerts, and market shifts.
 Events are pushed to both the overlay and the web dashboard.
 """
 
@@ -21,7 +21,6 @@ class TickerEventType(str, Enum):
     BID_PLACED = "BID_PLACED"
     PLAYER_SOLD = "PLAYER_SOLD"
     BUDGET_ALERT = "BUDGET_ALERT"
-    DEAD_MONEY = "DEAD_MONEY"
     MARKET_SHIFT = "MARKET_SHIFT"
 
 

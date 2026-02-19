@@ -87,48 +87,33 @@ def calculate_scarcity_multiplier(player: PlayerState, state: DraftState) -> flo
 
 def calculate_need_multiplier(player: PlayerState, state: DraftState) -> float:
     """
-    Roster need multiplier based on how many open slots can accept this position.
-
-    Returns:
-      0.0  — No open slot exists for this position. Hard PASS.
-      0.5  — Only flex slots remain (position starters full). Discount value.
-      1.0  — Dedicated starter slot still open. Full value.
-      1.2  — Last open slot for this position AND it's a need. Slight premium.
+    Roster need multiplier: 1.0 if a starter slot can accept this position,
+    0.0 if only bench or no slots available. BENCH slots don't drive bidding.
     """
     pos = player.projection.position.value
     eligibility = settings.SLOT_ELIGIBILITY
-    my_team = state.my_team
-
-    open_slots = my_team.open_slots_for_position(pos, eligibility)
-
+    open_slots = state.my_team.open_slots_for_position(pos, eligibility)
     if not open_slots:
-        return 0.0  # Cannot roster this player at all
+        return 0.0
+    # Only count starter (non-BENCH) slots
+    starter_slots = [
+        s for s in open_slots
+        if state.my_team.slot_types.get(s, s.rstrip("0123456789")) != "BENCH"
+    ]
+    return 1.0 if starter_slots else 0.0
 
-    # Check if any dedicated (non-flex) slot is still open for this position
-    has_dedicated_slot = False
-    flex_only = True
-    for slot_label in open_slots:
-        base_type = my_team.slot_types.get(slot_label, slot_label.rstrip("0123456789"))
-        if base_type == pos:
-            has_dedicated_slot = True
-            flex_only = False
-            break
-        if base_type not in ("FLEX", "SUPERFLEX"):
-            flex_only = False
 
-    if flex_only:
-        # Only flex spots remain — still usable but discount since flex is versatile
-        return 0.5
-
-    # Dedicated slot open — check if it's the last one (urgency premium)
-    dedicated_open = sum(
-        1 for sl in open_slots
-        if my_team.slot_types.get(sl, sl.rstrip("0123456789")) == pos
+def _has_only_bench_slots(player: PlayerState, state: DraftState) -> bool:
+    """Check if the only open slots for this player's position are BENCH."""
+    pos = player.projection.position.value
+    eligibility = settings.SLOT_ELIGIBILITY
+    open_slots = state.my_team.open_slots_for_position(pos, eligibility)
+    if not open_slots:
+        return False
+    return all(
+        state.my_team.slot_types.get(s, s.rstrip("0123456789")) == "BENCH"
+        for s in open_slots
     )
-    if dedicated_open == 1 and has_dedicated_slot:
-        return 1.2  # Last dedicated slot — slight urgency premium
-
-    return 1.0
 
 
 def calculate_strategy_multiplier(player: PlayerState, state: DraftState) -> float:
@@ -177,33 +162,21 @@ def get_engine_advice(
     fmv = calculate_fmv(player, state)
     scarcity = calculate_scarcity_multiplier(player, state)
     need = calculate_need_multiplier(player, state)
+    bench_only = _has_only_bench_slots(player, state)
     inflation = calculate_inflation(state)
     strat_mult = calculate_strategy_multiplier(player, state)
     adjusted_fmv = round(fmv * scarcity * need * strat_mult, 1)
+    # Market FMV: what the player is worth on the open market (ignoring our roster need)
+    market_fmv = round(fmv * scarcity * strat_mult, 1)
     budget_max = calculate_max_bid(state.my_team)
     pos = player.projection.position.value
 
-    # Hard constraint: no roster slot available
-    if need == 0.0:
-        return EngineAdvice(
-            action=AdviceAction.PASS,
-            max_bid=0,
-            fmv=round(fmv * scarcity, 1),  # Show the "true" FMV without need discount
-            inflation_rate=inflation,
-            scarcity_multiplier=scarcity,
-            vorp=vorp,
-            reasoning=(
-                f"No open roster slot for {pos}. All {pos}-eligible spots are filled. "
-                f"PASS — cannot roster this player."
-            ),
-        )
-
     # Build need context for reasoning
     need_info = ""
-    if need == 0.5:
-        need_info = f" [Only FLEX slots open for {pos} — value discounted 50%.]"
-    elif need == 1.2:
-        need_info = f" [Last dedicated {pos} slot — slight urgency premium.]"
+    if need == 0.0 and bench_only:
+        need_info = f" [Only bench slots open for {pos}.]"
+    elif need == 0.0:
+        need_info = f" [No open {pos} slot.]"
 
     # Strategy context for reasoning
     strat_info = ""
@@ -212,8 +185,37 @@ def get_engine_advice(
 
     # Decision logic
     effective_max = min(int(adjusted_fmv), budget_max)
+    # Always display market FMV (what the player is worth on the open market)
+    # Need multiplier affects max_bid logic but shouldn't distort the FMV display
+    display_fmv = market_fmv
 
-    if current_bid <= 0:
+    if need == 0.0 and current_bid > 0 and vorp > 0 and current_bid < market_fmv:
+        # No starter slot, but player going below market value — price enforce
+        action = AdviceAction.PRICE_ENFORCE
+        effective_max = min(int(market_fmv), budget_max)
+        slot_context = "Only bench slots" if bench_only else "No open slot"
+        reasoning = (
+            f"{slot_context} for {pos}, but ${int(current_bid)} is below market FMV "
+            f"${market_fmv}. Bid up to ${effective_max} to deny a bargain "
+            f"and drain opponent budgets.{strat_info}"
+        )
+    elif need == 0.0 and bench_only:
+        # Only bench slots — don't actively pursue, fill at $1 later
+        action = AdviceAction.PASS
+        effective_max = 0
+        reasoning = (
+            f"All starter slots for {pos} are filled — only bench spots remain. "
+            f"PASS — fill bench at $1 later."
+        )
+    elif need == 0.0:
+        # No roster slot at all
+        action = AdviceAction.PASS
+        effective_max = 0
+        reasoning = (
+            f"No open roster slot for {pos}. All {pos}-eligible spots are filled. "
+            f"PASS — cannot roster this player."
+        )
+    elif current_bid <= 0:
         # No active bid yet — provide valuation
         action = AdviceAction.BUY if vorp > 0 else AdviceAction.PASS
         reasoning = (
@@ -228,13 +230,15 @@ def get_engine_advice(
             f"Current bid ${int(current_bid)} exceeds adjusted FMV "
             f"${adjusted_fmv} by {overpay_pct:.0f}%. Let someone else overpay.{need_info}{strat_info}"
         )
-    elif current_bid > adjusted_fmv:
-        # Slightly over FMV — price enforce
-        action = AdviceAction.PRICE_ENFORCE
+    elif current_bid > adjusted_fmv and vorp > 0:
+        # Slightly over FMV but you need the player — cautious BUY
+        action = AdviceAction.BUY
         effective_max = min(int(adjusted_fmv * 1.10), budget_max)
+        overpay_pct = (current_bid / adjusted_fmv - 1) * 100 if adjusted_fmv > 0 else 0
         reasoning = (
-            f"Bid ${int(current_bid)} is above FMV ${adjusted_fmv} but close. "
-            f"Push price to make the winner overpay. Don't exceed ${effective_max}.{need_info}{strat_info}"
+            f"Bid ${int(current_bid)} is {overpay_pct:.0f}% above FMV ${adjusted_fmv}. "
+            f"Slightly over value — proceed only if you value the {pos} need. "
+            f"Max ${effective_max}.{need_info}{strat_info}"
         )
     elif vorp > 0:
         # At or below value with positive VORP — buy
@@ -257,7 +261,7 @@ def get_engine_advice(
 
     # ADP comparison
     adp_val = player.adp_value
-    adp_note = compare_fmv_to_adp(adjusted_fmv, adp_val)
+    adp_note = compare_fmv_to_adp(display_fmv, adp_val)
     if adp_note:
         reasoning += f" [{adp_note}]"
 
@@ -272,7 +276,7 @@ def get_engine_advice(
     return EngineAdvice(
         action=action,
         max_bid=effective_max,
-        fmv=adjusted_fmv,
+        fmv=display_fmv,
         inflation_rate=inflation,
         scarcity_multiplier=scarcity,
         vorp=vorp,

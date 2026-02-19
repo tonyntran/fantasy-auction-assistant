@@ -76,11 +76,8 @@ class DraftState:
         # Opponent tracking
         self.opponent_tracker = OpponentTracker()
 
-        # Newly drafted players from latest update (for ticker/dead money)
+        # Newly drafted players from latest update (for ticker)
         self.newly_drafted: list[PlayerState] = []
-
-        # Dead money log (overpay alerts)
-        self.dead_money_log: list[dict] = []
 
         # Team display aliases (e.g. {"Team 1": "Alice", "Team 3": "TonyCollects"})
         self.team_aliases: dict[str, str] = {}
@@ -128,7 +125,6 @@ class DraftState:
         self.raw_latest.clear()
         self.inflation_history.clear()
         self.newly_drafted.clear()
-        self.dead_money_log.clear()
         self._recompute_aggregates()
 
     # -----------------------------------------------------------------
@@ -295,7 +291,7 @@ class DraftState:
         self.draft_log = [e.model_dump() for e in data.draftLog]
         self._recompute_aggregates()
 
-        # Detect newly drafted players for ticker + dead money
+        # Detect newly drafted players for ticker
         self.newly_drafted = [
             ps for k, ps in self.players.items()
             if ps.is_drafted and k not in previously_drafted
@@ -334,7 +330,7 @@ class DraftState:
 
     def _add_to_my_roster(self, entry: DraftLogEntry, ps: PlayerState):
         """Slot a drafted player into the best available roster slot.
-        Prefers dedicated position slots before flex slots."""
+        Priority: dedicated position > flex/superflex > bench."""
         pos = ps.projection.position.value
         eligibility = settings.SLOT_ELIGIBILITY
 
@@ -343,15 +339,25 @@ class DraftState:
         if not open_slots:
             return  # No room (shouldn't happen if engine is working)
 
-        # Prefer dedicated slots (exact position match) over flex slots
+        # Priority 1: Dedicated position slot (exact match)
         best_slot = None
         for slot in open_slots:
             base_type = self.my_team.slot_types.get(slot, slot.rstrip("0123456789"))
             if base_type == pos:
                 best_slot = slot
                 break
+
+        # Priority 2: First non-BENCH flex slot
         if best_slot is None:
-            best_slot = open_slots[0]  # First available flex
+            for slot in open_slots:
+                base_type = self.my_team.slot_types.get(slot, slot.rstrip("0123456789"))
+                if base_type != "BENCH":
+                    best_slot = slot
+                    break
+
+        # Priority 3: BENCH (last resort)
+        if best_slot is None:
+            best_slot = open_slots[0]
 
         self.my_team.roster[best_slot] = entry.playerName
         self.my_team.players_acquired.append(
@@ -398,8 +404,12 @@ class DraftState:
         return self.my_team.can_still_start(position, settings.SLOT_ELIGIBILITY)
 
     def get_positional_need(self) -> dict[str, int]:
-        """How many open slots can accept each position?"""
+        """How many open slots can accept each position (including bench)?"""
         return self.my_team.positional_need_summary(settings.SLOT_ELIGIBILITY)
+
+    def get_starter_need(self) -> dict[str, int]:
+        """How many open STARTER slots can accept each position? (excludes BENCH)"""
+        return self.my_team.positional_need_summary(settings.SLOT_ELIGIBILITY, exclude_bench=True)
 
     def apply_alias(self, name: Optional[str]) -> Optional[str]:
         """Apply team alias for display. Returns aliased name or original."""

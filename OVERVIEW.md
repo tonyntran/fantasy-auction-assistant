@@ -1,17 +1,17 @@
 # Fantasy Auction Assistant — Project Overview
 
-A real-time ESPN Fantasy Football auction draft assistant. A Chrome Extension scrapes ESPN's live draft state, a Python FastAPI backend crunches VORP/FMV/scarcity/inflation math, Gemini AI provides contextual advice, and a React dashboard visualizes everything.
+A real-time fantasy football auction draft assistant built primarily for the Sleeper platform (with ESPN support). A Chrome extension intercepts Sleeper's live WebSocket data, a Python FastAPI backend runs VORP/FMV/scarcity/inflation math, Claude AI provides strategic advice, and a React dashboard visualizes everything.
 
 ```
 ┌─────────────────────┐     POST /draft_update      ┌──────────────────────┐
 │   Chrome Extension   │ ──────────────────────────► │   FastAPI Backend    │
 │   (content.js)       │ ◄────────────────────────── │   (server.py)        │
 │                      │     advice JSON             │                      │
-│  • React Fiber       │                             │  • VORP / FMV engine │
-│    traversal         │                             │  • Gemini AI advisor │
-│  • DOM fallback      │                             │  • Event sourcing    │
-│  • Overlay UI        │                             │  • Opponent modeling │
-│  • Watch list        │                             │  • Ticker + alerts   │
+│  • Sleeper WS        │                             │  • VORP / FMV engine │
+│    interceptor       │                             │  • Claude AI advisor │
+│  • ESPN Fiber        │                             │  • Event sourcing    │
+│    fallback          │                             │  • Opponent modeling │
+│  • Overlay UI        │                             │  • Ticker + alerts   │
 └─────────────────────┘                              └──────┬───────────────┘
                                                             │ WebSocket
                                                             ▼
@@ -20,9 +20,11 @@ A real-time ESPN Fantasy Football auction draft assistant. A Chrome Extension sc
                                                      │   (Vite + daisyUI)   │
                                                      │                      │
                                                      │  • DraftBoard table  │
+                                                     │  • Roster optimizer  │
+                                                     │  • AI draft plan     │
                                                      │  • Budget tracker    │
-                                                     │  • Inflation chart   │
                                                      │  • Scarcity heatmap  │
+                                                     │  • VOM leaderboard   │
                                                      │  • Live ticker feed  │
                                                      └──────────────────────┘
 ```
@@ -34,20 +36,22 @@ A real-time ESPN Fantasy Football auction draft assistant. A Chrome Extension sc
 ```
 fantasy-auction-assistant/
 ├── backend/
-│   ├── server.py            # FastAPI app — endpoints, WebSocket, SSE streaming
+│   ├── server.py            # FastAPI app — endpoints, WebSocket, event broadcasting
 │   ├── state.py             # Singleton DraftState — tracks all players, teams, rosters
 │   ├── engine.py            # Pure math engine — VORP, FMV, VONA, inflation, scarcity
-│   ├── config.py            # Pydantic settings from .env — roster slots, sport profiles, draft strategies
-│   ├── models.py            # Data models — DraftUpdate, PlayerState, EngineAdvice, etc.
-│   ├── ai_advisor.py        # Gemini 1.5 Flash integration — contextual advice + streaming
+│   ├── config.py            # Pydantic settings from .env — roster slots, sport profiles, strategies
+│   ├── models.py            # Data models — DraftUpdate, PlayerState, EngineAdvice, MyTeamState
+│   ├── ai_advisor.py        # Claude/Gemini integration — contextual advice with caching
+│   ├── draft_plan.py        # On-demand AI draft plan — spending strategy, key targets, bargains
+│   ├── roster_optimizer.py  # Two-phase optimizer — starters by VORP/$, bench at $1 each
 │   ├── projections.py       # Multi-source CSV loader with weighted merging
-│   ├── fuzzy_match.py       # RapidFuzz name resolution (ESPN names ↔ projections CSV)
+│   ├── fuzzy_match.py       # RapidFuzz name resolution (platform names ↔ projections CSV)
 │   ├── adp.py               # ADP auction values — consensus market comparison
 │   ├── opponent_model.py    # Opponent roster tracking — positional needs + bidding war risk
 │   ├── nomination.py        # Nomination strategy engine — drain / desperation / bargain
 │   ├── sleeper_watch.py     # End-game $1–3 bargain targeting
+│   ├── player_news.py       # Injury/status data from Sleeper's player database
 │   ├── ticker.py            # Live event feed — rolling 50-event buffer
-│   ├── dead_money.py        # Overpay detection — flags sales >30% above FMV
 │   ├── what_if.py           # Draft simulation — "what if I spend $X on Player Y?"
 │   ├── grader.py            # Post-draft AI grading — position grades, best/worst picks
 │   ├── event_store.py       # Append-only JSONL event log for crash recovery
@@ -57,10 +61,10 @@ fantasy-auction-assistant/
 │       └── sheet_2026.csv   # Player projections (name, position, points, AAV, tier)
 │
 ├── extension/
-│   ├── manifest.json        # Manifest V3 — dual-world content scripts
-│   ├── content.js           # MAIN world — React Fiber scraping + overlay UI
+│   ├── manifest.json        # Manifest V3 — Sleeper + ESPN content scripts
+│   ├── content.js           # MAIN world — Sleeper WS interceptor, ESPN Fiber scraping, overlay UI
 │   ├── content-bridge.js    # ISOLATED world — chrome.runtime message bridge
-│   └── background.js        # Service worker — cookie extraction, server comms, health
+│   └── background.js        # Service worker — cookie extraction, server comms, health polling
 │
 └── dashboard/
     ├── src/
@@ -69,19 +73,18 @@ fantasy-auction-assistant/
     │   │   ├── useDraftState.js   # Fetches initial state + subscribes to WebSocket
     │   │   └── useWebSocket.js    # Persistent WS with auto-reconnect
     │   └── components/
-    │       ├── Header.jsx         # Connection status, budget, inflation, strategy selector
-    │       ├── CurrentAdvice.jsx  # Latest AI/engine recommendation
-    │       ├── MyRoster.jsx       # Slot-by-slot roster display
-    │       ├── DraftBoard.jsx     # Full player table with filters + search
-    │       ├── BudgetTracker.jsx  # All-team budget comparison
-    │       ├── InflationGraph.jsx # Recharts line chart over time
-    │       ├── ScarcityHeatMap.jsx# Position-level supply remaining
-    │       ├── TopRemaining.jsx   # Top 3 undrafted per position
-    │       ├── NominationPanel.jsx# Strategic nomination suggestions
-    │       ├── SleeperWatch.jsx   # Late-draft bargain candidates
-    │       ├── OpponentNeeds.jsx  # Opponent positional needs matrix
-    │       ├── ActivityFeed.jsx   # Live ticker event stream
-    │       └── DeadMoneyAlert.jsx # Overpay warning banners
+    │       ├── Header.jsx          # Connection status, budget, inflation, strategy selector
+    │       ├── CurrentAdvice.jsx   # Latest AI/engine recommendation with player news
+    │       ├── MyRoster.jsx        # Slot-by-slot roster display (starters + bench)
+    │       ├── DraftBoard.jsx      # Full player table with filters, search, and news badges
+    │       ├── TeamOverview.jsx    # All-team budget comparison + opponent needs
+    │       ├── ScarcityHeatMap.jsx # Position/tier supply remaining
+    │       ├── TopRemaining.jsx    # Top undrafted per position
+    │       ├── RosterOptimizer.jsx # Optimal picks + AI draft plan with staleness tracking
+    │       ├── VomLeaderboard.jsx  # Value Over Market — biggest bargains and overpays
+    │       ├── NominationPanel.jsx # Strategic nomination suggestions
+    │       ├── SleeperWatch.jsx    # Late-draft bargain candidates
+    │       └── ActivityFeed.jsx    # Live ticker event stream
     ├── tailwind.config.js
     └── package.json
 ```
@@ -90,12 +93,11 @@ fantasy-auction-assistant/
 
 ## Data Flow
 
-1. **ESPN draft room** loads in Chrome. `content.js` injects into the page (MAIN world) and polls every 500ms.
-2. **React Fiber traversal** walks ESPN's internal `__reactFiber$` tree to extract picks, nominations, bids, budgets, and rosters. Falls back to DOM scraping if the fiber isn't found.
-3. Payload goes through `content-bridge.js` (ISOLATED world, has `chrome.runtime` access) → `background.js` (service worker), which attaches ESPN cookies (SWID, espn_s2).
-4. **`POST /draft_update`** hits the FastAPI backend. The state singleton updates, the engine runs all calculations, Gemini is called (with a 400ms timeout), and a response is sent back.
-5. The overlay in ESPN updates with the advice. Simultaneously, the backend **broadcasts a WebSocket snapshot** to the React dashboard.
-6. Every state change is appended to `event_log.jsonl` so the entire draft can be replayed on restart.
+1. **Sleeper draft room** loads in Chrome. `content.js` injects into the page (MAIN world) and installs a **WebSocket interceptor** that captures Sleeper's real-time draft messages (picks, bids, nominations, rosters). For ESPN, it polls React Fiber state every 500ms as a fallback.
+2. Payload goes through `content-bridge.js` (ISOLATED world, has `chrome.runtime` access) → `background.js` (service worker).
+3. **`POST /draft_update`** hits the FastAPI backend. The state singleton updates, the engine runs all calculations, Claude AI is called asynchronously, and a response is sent back.
+4. The overlay on the draft page updates with the advice. Simultaneously, the backend **broadcasts a WebSocket snapshot** to the React dashboard.
+5. Every state change is appended to `event_log.jsonl` so the entire draft can be replayed on restart.
 
 ---
 
@@ -110,67 +112,90 @@ All pure math, no I/O. Called on every `/draft_update`.
 | **VORP** | `projected_points − replacement_level_points`. Replacement level = Nth-ranked player at that position (configurable via `VORP_BASELINE_*`). |
 | **FMV** | `BaselineAAV × inflation`. The inflation-adjusted "true" price of a player right now. |
 | **Inflation** | `total_remaining_cash / total_remaining_AAV` across all undrafted players. Starts near 1.0, climbs as money pools shrink slower than player supply. |
-| **VONA** | `player.projected_points − next_best_undrafted.projected_points` at the same position. Measures positional scarcity: high VONA = big drop-off if you miss this player. |
-| **Scarcity Multiplier** | Tier-based shortage premium. When 70%+ of a tier is drafted → 1.15×, 85%+ → 1.3×. Applied to FMV. |
-| **Need Multiplier** | Roster fit scoring. 0.0 = no slot (hard PASS), 0.5 = flex-only, 1.0 = starter slot open, 1.2 = last starter slot at that position. |
-| **Strategy Multiplier** | Draft strategy bias combining `position_weight × tier_weight` from the active strategy profile. Adjusts FMV and optimizer VORP/$ ratios. |
+| **VONA** | `player.projected_points − next_best_undrafted.projected_points` at the same position. Measures positional scarcity: high VONA = big gap — don't let this player slip. |
+| **Scarcity Multiplier** | Tier-based shortage premium. When 50%+ of a tier is drafted → 1.05×, 70%+ → 1.15×, 85%+ → 1.3×. Applied to FMV. |
+| **Need Multiplier** | Binary roster fit: 1.0 = starter slot open, 0.0 = only bench or no slot. BENCH slots don't drive bidding — bench is filled at $1 at the end. |
+| **Strategy Multiplier** | Draft strategy bias: `position_weight × tier_weight` from the active profile. Adjusts FMV and optimizer VORP/$ ratios. |
 
-The engine combines these into an **action recommendation**:
-- **BUY** — bid ≤ adjusted FMV, positive VORP, open roster slot → suggested bid returned
-- **PASS** — no slot, bid >15% above FMV, or negative VORP
-- **PRICE_ENFORCE** — bid slightly above FMV (up to +10%), worth pushing price up to drain opponent budgets
+The engine produces two FMV values:
+- **Adjusted FMV** = `FMV × scarcity × need × strategy` — used for bid logic (whether to buy or pass)
+- **Market FMV** = `FMV × scarcity × strategy` — displayed to the user (what the player is worth on the open market regardless of your roster)
+
+Action recommendations:
+- **BUY** — bid at or below adjusted FMV, positive VORP, starter slot open
+- **PASS** — no starter slot, bid >15% above FMV, negative VORP, or bench-only
+- **PRICE_ENFORCE** — no starter need but player going below market FMV; bid up to deny a bargain and drain opponent budgets
 
 ### Draft Strategy Profiles (`config.py`)
 
-Configurable draft philosophies that bias the entire system — engine advice, optimizer, what-if, nominations, and AI context. Switchable at runtime via `POST /strategy` or the dashboard header dropdown.
+Configurable draft philosophies that bias the entire system. Switchable at runtime via `POST /strategy` or the dashboard header dropdown.
 
 | Strategy | Key Idea | Effect |
 |---|---|---|
 | **Balanced** | No bias (default) | All multipliers 1.0 |
-| **Studs & Duds** | Spend 70%+ on 2-3 elite players | T1-T2 boosted, T3+ discounted |
+| **Studs & Steals** | Pay premium for 2-3 elite starters, then hunt undervalued sleepers with upside catalysts | T1 1.15×, T2 1.05×, T3-T5 discounted |
 | **RB Heavy** | Prioritize running backs | RB 1.3×, others slightly reduced |
 | **WR Heavy** | Prioritize wide receivers | WR 1.3×, others slightly reduced |
 | **Elite TE** | Pay premium for a top tight end | TE 1.35×, T1-T2 boosted |
 
-Each strategy defines position weights and tier weights. The combined multiplier `position_weight × tier_weight` is applied to:
-- **Engine advice** — adjusts FMV and action thresholds
-- **Roster optimizer** — biases VORP/$ ratio in greedy fill
-- **What-if simulator** — same VORP/$ bias
-- **Nomination engine** — shifts priority toward/away from strategy positions
-- **AI advisor** — strategy context injected into the prompt
+For Studs & Steals specifically, the AI advisor injects tier-aware guidance: aggressive pursuit of Tier 1 players, and upside catalyst evaluation (new role, coaching scheme, breakout trajectory) for Tier 2+ players flagged as potential steals.
 
 ### AI Advisor (`ai_advisor.py`)
 
-Wraps Gemini 1.5 Flash with rich draft context:
+Supports Claude (Anthropic API) and Gemini, configurable via `AI_PROVIDER`. Claude is the primary provider.
 
+Context sent to the AI on each nomination:
 - Current engine advice (FMV, VORP, VONA, action)
 - Opponent positional needs + bidding war risk flags
 - Recent picks with prices (trend detection)
 - Top remaining players by position
 - ADP vs FMV comparison
 - My roster state + remaining budget
-- Team synergy notes
+- Draft strategy context with tier-specific guidance
 
-The AI call has a **400ms timeout** — if Gemini is slow, the response falls back to engine-only advice (no delay to the user). Responses are cached for 10 seconds with bid-bucketed keys to avoid redundant calls.
+The AI call has a configurable timeout (`AI_TIMEOUT_MS`, default 8s). If the AI is slow, the response falls back to engine-only advice. Responses are cached for 120 seconds per player to avoid redundant calls. Rate limiting is handled with a 60-second backoff on 429 responses.
 
-**SSE streaming** (`GET /stream/{player}`) provides progressive AI output for the overlay's streaming display.
+### AI Draft Plan (`draft_plan.py`)
+
+On-demand strategic spending plan triggered by button click in the dashboard. Synthesizes optimizer output with AI analysis of market dynamics, opponent pressure, and spending allocation.
+
+The prompt uses **starter-only needs** (bench excluded) and calculates a spendable budget after reserving $1 per bench spot. The AI returns structured JSON:
+
+- **Strategy summary** — 2-3 sentence overview
+- **Spending plan** — budget allocation per position with tier targets
+- **Key targets** — 3-5 premium players with price ranges and priority levels
+- **Bargain picks** — 1-2 value sleepers with upside reasoning
+- **Avoid list** — players to let opponents overpay for
+- **Budget reserve** — minimal ($1 per bench spot)
+
+Cached with staleness tracking — invalidated when any player is drafted. The dashboard shows a freshness badge (Fresh / N picks ago).
+
+### Roster Optimizer (`roster_optimizer.py`)
+
+Two-phase greedy fill:
+
+1. **Phase 1: Starters** — Fill all starter slots (QB, RB, WR, TE, FLEX, K, DEF) by best VORP/$ ratio, using the starter-only budget (total minus $1 per bench spot)
+2. **Phase 2: Bench** — Fill 6 bench spots at $1 each with the highest remaining VORP players
+
+Returns starter picks, bench picks, cost breakdown, and projected points.
 
 ### State Manager (`state.py`)
 
 A singleton that holds the entire draft in memory:
 
-- **Player pool** — all ~136 players loaded from CSV, each with draft status, price, buyer
+- **Player pool** — all ~140 players loaded from CSV, each with draft status, price, buyer
 - **Team budgets** — per-team remaining cash, tracked in real-time
-- **My roster** — slot-by-slot view (QB1, RB1, RB2, FLEX1, etc.) with auto-assignment
-- **Opponent rosters** — parsed from ESPN roster data, fed into opponent model
-- **Inflation history** — timestamped series for the dashboard chart
+- **My roster** — slot-by-slot view (QB, RB1, RB2, FLEX1, FLEX2, BENCH1-6, etc.) with auto-assignment
+- **Slot priority** — when assigning a drafted player: dedicated slot > flex/superflex > bench
+- **Opponent rosters** — parsed from platform roster data, fed into opponent model
+- **Inflation history** — timestamped series for tracking over time
 - **VONA cache** — pre-computed for every undrafted player on each update
-- **Replacement levels** — recalculated as players are drafted
 
 Key behaviors:
-- **Fuzzy name matching** reconciles ESPN display names with projections CSV (handles "A.J. Brown" → "AJ Brown", "Patrick Mahomes II" → "Patrick Mahomes", suffix stripping)
+- **Fuzzy name matching** — RapidFuzz reconciles platform display names with projections CSV
 - **Event replay** on startup from `event_log.jsonl` restores full state after crashes
-- **Reset** command wipes state for a fresh draft
+- **Starter vs bench need** — `get_starter_need()` excludes bench slots for engine/optimizer use; `get_positional_need()` includes all slots
+- **Team aliases** — map platform team IDs to display names
 
 ### Opponent Model (`opponent_model.py`)
 
@@ -180,7 +205,7 @@ Analyzes all non-user teams:
 - **Bidding war risk** — flagged when `teams_needing_position / players_remaining ≥ 75%`
 - **Spending power** — `remaining_budget − remaining_roster_holes` (effective per-player budget)
 
-This feeds into the AI advisor context and the nomination engine.
+Feeds into AI advisor context, nomination engine, and the AI draft plan.
 
 ### Nomination Strategy (`nomination.py`)
 
@@ -200,46 +225,45 @@ Identifies end-of-draft bargain targets ($1–3 players):
 - FMV between $3–25 (not a kicker, not an elite player)
 - Most teams are budget-constrained (can't afford to bid up)
 
-**Sleeper score** = `VORP × 0.4 + constraint_ratio × 20 + price_discount × 10`
+### Player News (`player_news.py`)
+
+Fetches injury and status data from the Sleeper player database API. Cached for 30 minutes. Surfaces injury designations, status changes, and news blurbs on the draft board and current advice panel.
 
 ### Live Ticker (`ticker.py`)
 
-Rolling 50-event buffer with 6 event types:
+Rolling 50-event buffer with event types:
 
 | Event | Trigger |
 |---|---|
 | `NEW_NOMINATION` | Player put on the block |
 | `BID_PLACED` | New high bid detected |
-| `PLAYER_SOLD` | Bidding closes |
-| `BUDGET_ALERT` | Team drops below $15 remaining |
-| `DEAD_MONEY` | Sale >30% above FMV (overpay) |
+| `PLAYER_SOLD` | Bidding closes — shows sale price vs FMV |
+| `BUDGET_ALERT` | Team drops below critical budget threshold |
 | `MARKET_SHIFT` | Inflation changes >0.5% on a single sale |
 
 Events are deduped by type + player + bid to avoid noise.
-
-### Dead Money Detection (`dead_money.py`)
-
-Flags overpays where `draft_price > FMV × 1.30`. Captures the **pre-sale inflation** so the FMV comparison is accurate (inflation recalculates after each sale). Tracks the inflation delta caused by the overpay.
 
 ### What-If Simulator (`what_if.py`)
 
 `GET /whatif?player=Saquon Barkley&price=70`
 
-Deep-clones the draft state, simulates buying the player at the given price, then **greedily fills the rest of your roster** by best VORP/$ ratio. Returns projected total points and the optimal remaining picks.
+Deep-clones the draft state, simulates buying the player at the given price, then greedily fills the rest of your starter roster by best VORP/$ ratio (reserving $1 per bench spot). Returns projected total points and the optimal remaining picks.
 
 ### Post-Draft Grader (`grader.py`)
 
 `GET /grade`
 
-Sends your full roster with surplus values (BaselineAAV − price) to Gemini with a 10-second timeout. Returns:
+Sends your full roster with surplus values (BaselineAAV − price) to Claude. Returns:
 - Overall letter grade (A+ to F)
 - Per-position grades
 - Best and worst picks with reasoning
 - Waiver wire targets for weak spots
 
+Falls back to engine-only grade (points + surplus totals) if AI is unavailable.
+
 ### Event Sourcing (`event_store.py`)
 
-Every `/draft_update` and `/manual` call is appended to `event_log.jsonl` with a sequence number. On startup, the entire log is replayed to reconstruct state. This means the server can crash mid-draft and pick up exactly where it left off.
+Every `/draft_update` and `/manual` call is appended to `event_log.jsonl` with a sequence number. On startup, the entire log is replayed to reconstruct state. The server can crash mid-draft and pick up exactly where it left off.
 
 ---
 
@@ -247,13 +271,13 @@ Every `/draft_update` and `/manual` call is appended to `event_log.jsonl` with a
 
 ### Architecture (Manifest V3)
 
-ESPN's Content Security Policy blocks inline scripts, so the extension uses a **dual-world injection pattern**:
+The extension uses a **dual-world injection pattern** to bridge page context with Chrome APIs:
 
 ```
 ┌─ MAIN world ──────────────┐    window.postMessage    ┌─ ISOLATED world ────────────┐
 │  content.js                │ ───────────────────────► │  content-bridge.js           │
-│  • Can access React Fiber  │                          │  • Has chrome.runtime        │
-│  • Can read page JS state  │ ◄─────────────────────── │  • Relays to background.js   │
+│  • Sleeper WS interceptor  │                          │  • Has chrome.runtime        │
+│  • ESPN React Fiber access │ ◄─────────────────────── │  • Relays to background.js   │
 │  • Renders overlay UI      │    window.postMessage     │                              │
 └────────────────────────────┘                          └──────────────────────────────┘
                                                                     │
@@ -261,79 +285,95 @@ ESPN's Content Security Policy blocks inline scripts, so the extension uses a **
                                                                     ▼
                                                         ┌──────────────────────────┐
                                                         │  background.js           │
-                                                        │  • Reads ESPN cookies    │
                                                         │  • POST to backend       │
                                                         │  • Health polling (5s)   │
-                                                        │  • SSE streaming proxy   │
+                                                        │  • Cookie extraction     │
                                                         └──────────────────────────┘
 ```
 
-### ESPN Scraping (`content.js`)
+### Sleeper Integration (`content.js`)
 
-The extension finds ESPN's React root and walks the `__reactFiber$` tree to extract:
+The extension intercepts Sleeper's WebSocket connection by patching the global `WebSocket` constructor before Sleeper's JavaScript loads (`run_at: "document_start"`). This captures real-time draft messages:
 
-- `draftDetail.picks` — completed draft picks
-- `draftDetail.currentPick` — active nomination (player, bid, bidder)
-- `teams[].remainingBudget` — all team budgets
-- `rosters` — full roster assignments per team
-- `players` map — player metadata (name, position, slot IDs)
+- **Picks/sales** — player name, price, team
+- **Nominations** — current player on the block
+- **Bids** — live bid updates
+- **Rosters** — full roster state per team
+- **Budgets** — remaining cash per team
 
-If the fiber tree isn't accessible (ESPN DOM update, race condition), it falls back to **DOM selectors** for the nomination bar, bid amount, and team list.
+### ESPN Fallback
 
-Polling runs every **500ms** with hash-based deduplication — if the state hasn't changed, no request is sent.
+For ESPN draft rooms, `content.js` walks the `__reactFiber$` tree to extract picks, nominations, bids, budgets, and rosters. Falls back to DOM scraping if the fiber tree isn't accessible.
+
+Polling runs every 500ms with hash-based deduplication — if the state hasn't changed, no request is sent.
 
 ### Overlay UI
 
-A draggable, resizable panel injected into the ESPN draft page:
+A panel injected into the draft page with inline styles:
 
-- **3-state minimize**: full panel → compact header → hidden
-- **Live advice**: color-coded action (green = BUY, red = PASS, yellow = PRICE_ENFORCE)
-- **Suggested bid** with max bid ceiling
-- **Manual input** — type commands: `sold PlayerName 45`, `undo PlayerName`, `watch PlayerName`, `whatif PlayerName 50`
-- **Watch list** — tracked players trigger an audio alert (880Hz beep) + border flash when nominated
-- **Mini roster** — your current roster slots
-- **Top remaining** — best available per position
-- **Live ticker** — scrolling event feed with type badges
-- **Dead money flash** — red border pulse on overpay detection
-
-### Background Service Worker (`background.js`)
-
-- Reads ESPN's `SWID` and `espn_s2` cookies, attaches them to backend requests
-- 5-second health polling to `/health` — broadcasts connection status to all tabs
-- SSE streaming proxy — connects to `/stream/{player}` with an AbortController
-- Forwards manual override commands to `/manual`
+- **Nomination + bid info** at the top
+- **Live advice** — color-coded action (green = BUY, red = PASS, yellow = PRICE_ENFORCE) with FMV, VORP, VONA
+- **Strategy badge** — shows the active draft strategy
+- **Manual input** — type commands: `sold PlayerName 45`, `undo PlayerName`, `nom PlayerName`, `whatif PlayerName 50`, `suggest`
+- **Watch list** — tracked players trigger a beep + border flash when nominated
+- **Live ticker** — scrolling event feed
 
 ---
 
 ## React Dashboard
 
-**Stack**: Vite + React 18 + Tailwind CSS + daisyUI + Recharts
+**Stack**: Vite + React 18 + Tailwind CSS + daisyUI
 
 ### Layout
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Header: strategy │ budget │ inflation │ picks │ AI status     │
-├────────────────┬────────────────┬──────────────┬────────────────┤
-│ CurrentAdvice  │  MyRoster      │ TopRemaining │ ActivityFeed   │
-│ (latest rec)   │  (slot view)   │ (by pos)     │ (live ticker)  │
-├────────────────┼────────────────┼──────────────┼────────────────┤
-│ BudgetTracker  │ InflationGraph │ ScarcityMap  │ NominationPanel│
-│ (all teams)    │ (line chart)   │ (heatmap)    │ (suggestions)  │
-├────────────────┴────────────────┼──────────────┴────────────────┤
-│ SleeperWatch                    │ OpponentNeeds                  │
-│ (bargain targets)               │ (positional needs matrix)      │
-├─────────────────────────────────┴────────────────────────────────┤
-│ DraftBoard (full player table — filter by position, search)      │
-│ Columns: Player, Pos, Tier, FMV, VORP, VONA, Price              │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Header: strategy selector │ budget │ inflation │ picks │ AI status          │
+├───────────────────┬─────────────────┬──────────────────┬─────────────────────┤
+│ CurrentAdvice     │  TopRemaining   │  ActivityFeed    │ RosterOptimizer     │
+│ (latest rec +     │  (top undrafted │  (live ticker)   │ (optimal picks +    │
+│  player news)     │   by position)  │                  │  AI draft plan,     │
+├───────────────────┼─────────────────┼──────────────────┤  sticky sidebar)    │
+│ MyRoster          │  TeamOverview   │  ScarcityHeatMap │                     │
+│ (starters + bench │  (budgets +     │  (pos/tier grid) │                     │
+│  with separator)  │   opp needs)    │                  │                     │
+├───────────────────┼─────────────────┼──────────────────┤                     │
+│ VomLeaderboard    │  SleeperWatch   │  NominationPanel │                     │
+│ (bargains/overpay)│  (endgame $1-3) │  (nom strategy)  │                     │
+├───────────────────┴─────────────────┴──────────────────┴─────────────────────┤
+│ DraftBoard (full player table — filter by position, search, news badges)     │
+│ Columns: Player, Pos, Tier, Pts, FMV, VORP, VONA, Status, Price, Buyer      │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Glossary (VORP, VONA, FMV, Inflation, VOM definitions + value scales)        │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Real-Time Updates
 
-`useDraftState` hook fetches initial state from `GET /dashboard/state`, then subscribes to `ws://localhost:8000/ws`. Every `/draft_update` the backend processes triggers a WebSocket broadcast with the full state snapshot. Components re-render instantly.
+`useDraftState` hook fetches initial state from `GET /dashboard/state`, then subscribes to `ws://localhost:8000/ws`. Every `/draft_update` the backend processes triggers a WebSocket broadcast with the full state snapshot. Components re-render instantly. Auto-reconnect with 2-second delay on disconnect.
 
-Auto-reconnect with 2-second delay on disconnect.
+---
+
+## Roster Configuration
+
+The roster is defined by `ROSTER_SLOTS` in `.env`:
+
+```
+ROSTER_SLOTS=QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF,BENCH,BENCH,BENCH,BENCH,BENCH,BENCH
+```
+
+This produces 16 slots: 10 starters + 6 bench. The system treats starter and bench slots differently:
+
+- **Starters** (QB, RB, WR, TE, FLEX, K, DEF) — drive bidding recommendations, optimizer allocates budget
+- **BENCH** — accepts all positions, filled at $1 each at the end, does not drive engine advice
+
+Slot eligibility controls which positions each slot type accepts:
+- `QB/RB/WR/TE/K/DEF` — accept only their position
+- `FLEX` — accepts RB, WR, TE
+- `SUPERFLEX` — accepts QB, RB, WR, TE
+- `BENCH` — accepts all positions
+
+When a player is drafted to your team, slot assignment follows priority: **dedicated slot > flex > bench**.
 
 ---
 
@@ -341,19 +381,23 @@ Auto-reconnect with 2-second delay on disconnect.
 
 | Variable | Default | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | *(none)* | Optional — runs engine-only if not set |
-| `MY_TEAM_NAME` | `"My Team"` | Your team name as it appears on ESPN |
+| `AI_PROVIDER` | `"gemini"` | `claude` or `gemini` |
+| `ANTHROPIC_API_KEY` | *(none)* | Claude API key (required if `AI_PROVIDER=claude`) |
+| `GEMINI_API_KEY` | *(none)* | Gemini API key (required if `AI_PROVIDER=gemini`) |
+| `PLATFORM` | `"espn"` | `sleeper` or `espn` — auto-detected from extension |
+| `MY_TEAM_NAME` | `"My Team"` | Your team name as shown on the platform (comma-separated for aliases) |
 | `LEAGUE_SIZE` | `10` | Number of teams in the league |
 | `BUDGET` | `200` | Starting auction budget per team |
-| `ROSTER_SLOTS` | `QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF` | Comma-separated roster slots |
+| `ROSTER_SLOTS` | `QB,RB,RB,...,BENCH×6` | Comma-separated roster slots |
 | `SPORT` | `"football"` | `football`, `basketball`, or `auto` |
-| `DRAFT_STRATEGY` | `balanced` | Draft philosophy: `balanced`, `studs_and_duds`, `rb_heavy`, `wr_heavy`, `elite_te` |
+| `DRAFT_STRATEGY` | `balanced` | `balanced`, `studs_and_steals`, `rb_heavy`, `wr_heavy`, `elite_te` |
 | `CSV_PATH` | `data/sheet_2026.csv` | Player projections file |
 | `CSV_PATHS` | *(none)* | Multi-source: `path1,path2,path3` |
 | `PROJECTION_WEIGHTS` | *(none)* | Weights per source: `0.5,0.3,0.2` |
-| `ADP_CSV_PATH` | *(none)* | ADP auction values for comparison |
-| `GEMINI_MODEL` | `gemini-1.5-flash` | Which Gemini model to use |
-| `AI_TIMEOUT_MS` | `400` | Max wait for AI response (ms) |
+| `ADP_CSV_PATH` | *(none)* | ADP auction values for market comparison |
+| `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model for per-player advice |
+| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model (if using Gemini) |
+| `AI_TIMEOUT_MS` | `8000` | Max wait for AI response (ms) |
 | `VORP_BASELINE_QB` | `11` | Replacement level rank for QB |
 | `VORP_BASELINE_RB` | `30` | Replacement level rank for RB |
 | `VORP_BASELINE_WR` | `30` | Replacement level rank for WR |
@@ -365,9 +409,10 @@ Auto-reconnect with 2-second delay on disconnect.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/draft_update` | Receive ESPN state from extension, return advice |
+| `POST` | `/draft_update` | Receive platform state from extension, return advice |
 | `POST` | `/manual` | Manual commands: sold, budget, undo, nom, suggest, whatif |
 | `POST` | `/strategy` | Set active draft strategy profile |
+| `POST` | `/team_aliases` | Set team display name aliases |
 | `GET` | `/advice?player=...` | AI-enhanced advice for a specific player |
 | `GET` | `/health` | Heartbeat for connection monitoring |
 | `GET` | `/opponents` | Opponent positional needs analysis |
@@ -375,8 +420,11 @@ Auto-reconnect with 2-second delay on disconnect.
 | `GET` | `/nominate` | Nomination strategy suggestions |
 | `GET` | `/whatif?player=...&price=...` | Draft simulation |
 | `GET` | `/grade` | Post-draft AI grading |
-| `GET` | `/stream/{player}` | SSE streaming AI advice |
+| `GET` | `/optimize` | Optimal remaining picks |
+| `GET` | `/draft-plan` | On-demand AI draft plan with spending analysis |
 | `GET` | `/dashboard/state` | Full state snapshot for dashboard |
+| `GET` | `/state` | Debug state summary |
+| `GET` | `/team_aliases` | View current team aliases |
 | `WS` | `/ws` | Real-time updates to dashboard |
 
 ---
@@ -397,5 +445,5 @@ npm run dev                 # http://localhost:5173
 
 # 3. Extension
 # Chrome → chrome://extensions → Developer Mode → Load unpacked → select extension/
-# Navigate to your ESPN auction draft room — overlay appears automatically
+# Navigate to your Sleeper auction draft room — overlay appears automatically
 ```

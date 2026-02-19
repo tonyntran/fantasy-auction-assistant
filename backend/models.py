@@ -169,15 +169,30 @@ class MyTeamState(BaseModel):
         """Can we still fit a player of this position in any open slot?"""
         return len(self.open_slots_for_position(position, slot_eligibility)) > 0
 
-    def positional_need_summary(self, slot_eligibility: dict[str, list[str]]) -> dict[str, int]:
-        """Return {position: number_of_open_slots_that_accept_it}."""
+    def positional_need_summary(self, slot_eligibility: dict[str, list[str]], exclude_bench: bool = False) -> dict[str, int]:
+        """Return {position: number_of_open_slots_that_accept_it}.
+        If exclude_bench=True, only counts starter slots (non-BENCH)."""
         positions = set()
         for eligible in slot_eligibility.values():
             positions.update(eligible)
-        return {
-            pos: len(self.open_slots_for_position(pos, slot_eligibility))
-            for pos in sorted(positions)
-        }
+        result = {}
+        for pos in sorted(positions):
+            open_slots = self.open_slots_for_position(pos, slot_eligibility)
+            if exclude_bench:
+                open_slots = [
+                    s for s in open_slots
+                    if self.slot_types.get(s, s.rstrip("0123456789")) != "BENCH"
+                ]
+            result[pos] = len(open_slots)
+        return result
+
+    @property
+    def bench_spots_remaining(self) -> int:
+        """Count empty BENCH slots."""
+        return sum(
+            1 for slot, occupant in self.roster.items()
+            if occupant is None and self.slot_types.get(slot, slot.rstrip("0123456789")) == "BENCH"
+        )
 
 
 # =====================================================================

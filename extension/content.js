@@ -961,6 +961,7 @@
     overlayElement.innerHTML = `
       <div id="faa-header">
         <span id="faa-title">Auction Assistant</span>
+        <span id="faa-strategy" style="font-size:10px;color:#8899aa;margin-left:4px"></span>
         <span id="faa-status" class="faa-disconnected">&#x25CF;</span>
         <button id="faa-minimize">_</button>
       </div>
@@ -968,12 +969,10 @@
         <div id="faa-compact-line"></div>
       </div>
       <div id="faa-body">
-        <div id="faa-advice">Waiting for draft data...</div>
         <div id="faa-nomination"></div>
         <div id="faa-bid-info"></div>
+        <div id="faa-advice">Waiting for draft data...</div>
         <div id="faa-ai-reasoning"></div>
-        <div id="faa-roster"></div>
-        <div id="faa-top-remaining"></div>
         <div id="faa-ticker"></div>
         <div id="faa-manual">
           <input id="faa-manual-input" type="text" placeholder='e.g. "Bijan 55", "watch Kelce", "undo"' />
@@ -994,7 +993,7 @@
     const el = overlayElement;
     el.style.cssText = `
       position: fixed; top: 20px; right: 20px; width: 340px;
-      max-height: 500px; background: #1a1a2e; color: #e0e0e0;
+      max-height: 460px; background: #1a1a2e; color: #e0e0e0;
       border: 1px solid #16213e; border-radius: 8px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 999999;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -1009,7 +1008,10 @@
     `;
 
     const title = el.querySelector("#faa-title");
-    title.style.cssText = "flex: 1; font-weight: 600; font-size: 14px; color: #e94560;";
+    title.style.cssText = "font-weight: 600; font-size: 14px; color: #e94560;";
+
+    const strategy = el.querySelector("#faa-strategy");
+    strategy.style.cssText = "flex: 1; font-size: 10px; color: #8899aa; margin-left: 4px;";
 
     const status = el.querySelector("#faa-status");
     status.style.cssText = "font-size: 16px; margin-right: 8px; color: #ff1744;";
@@ -1025,52 +1027,43 @@
     compact.style.cssText = "padding: 6px 12px; font-size: 12px; color: #aaa;";
 
     const body = el.querySelector("#faa-body");
-    body.style.cssText = "padding: 12px; overflow-y: auto; max-height: 440px;";
+    body.style.cssText = "padding: 10px 12px; overflow-y: auto; max-height: 400px;";
 
+    // Nomination — top of body, prominent
+    const nom = el.querySelector("#faa-nomination");
+    nom.style.cssText = `
+      padding: 6px 8px; font-weight: 600; color: #e94560; font-size: 14px;
+      background: #12203a; border-radius: 6px; margin-bottom: 4px;
+    `;
+
+    // Bid info — right below nomination
+    const bid = el.querySelector("#faa-bid-info");
+    bid.style.cssText = `
+      padding: 3px 8px; color: #aaa; font-size: 12px; margin-bottom: 6px;
+    `;
+
+    // Advice — main action block
     const advice = el.querySelector("#faa-advice");
     advice.style.cssText = `
       padding: 8px 10px; background: #0f3460; border-radius: 6px;
-      margin-bottom: 8px; line-height: 1.5; white-space: pre-wrap;
+      margin-bottom: 6px; line-height: 1.5; white-space: pre-wrap;
     `;
-
-    const nom = el.querySelector("#faa-nomination");
-    nom.style.cssText = `
-      padding: 6px 0; font-weight: 500; color: #e94560;
-      border-bottom: 1px solid #16213e; margin-bottom: 4px;
-    `;
-
-    const bid = el.querySelector("#faa-bid-info");
-    bid.style.cssText = "padding: 4px 0; color: #aaa; font-size: 12px;";
 
     // AI reasoning section
     const aiReasoning = el.querySelector("#faa-ai-reasoning");
     aiReasoning.style.cssText = `
-      padding: 6px 8px; margin-top: 6px; background: #12203a;
+      padding: 6px 8px; margin-bottom: 6px; background: #12203a;
       border-radius: 4px; font-size: 11px; color: #8899aa;
       line-height: 1.4; white-space: pre-wrap; display: none;
-      max-height: 80px; overflow-y: auto;
+      max-height: 70px; overflow-y: auto;
     `;
 
-    // Mini roster display
-    const roster = el.querySelector("#faa-roster");
-    roster.style.cssText = `
-      margin-top: 8px; padding: 6px 8px; background: #12203a;
-      border-radius: 4px; font-size: 11px; color: #aaa; line-height: 1.6;
-    `;
-
-    // Top remaining display
-    const topRemaining = el.querySelector("#faa-top-remaining");
-    topRemaining.style.cssText = `
-      margin-top: 6px; padding: 6px 8px; background: #12203a;
-      border-radius: 4px; font-size: 11px; color: #aaa; line-height: 1.5;
-    `;
-
-    // Ticker section
+    // Ticker section — compact
     const tickerEl = el.querySelector("#faa-ticker");
     tickerEl.style.cssText = `
-      margin-top: 6px; padding: 6px 8px; background: #12203a;
-      border-radius: 4px; font-size: 10px; color: #aaa; line-height: 1.5;
-      max-height: 80px; overflow-y: auto;
+      padding: 6px 8px; background: #12203a;
+      border-radius: 4px; font-size: 10px; color: #aaa; line-height: 1.4;
+      max-height: 70px; overflow-y: auto;
     `;
 
     const manual = el.querySelector("#faa-manual");
@@ -1283,24 +1276,15 @@
         }
       }
 
-      // Mini roster display
-      if (raw.myRoster) {
-        updateRosterDisplay(raw.myRoster);
-      }
-
-      // Top remaining
-      if (raw.topRemaining) {
-        updateTopRemainingDisplay(raw.topRemaining);
-      }
-
       // Live ticker
       if (raw.tickerEvents) {
         updateTickerDisplay(raw.tickerEvents);
       }
 
-      // Dead money alerts
-      if (raw.deadMoneyAlerts && raw.deadMoneyAlerts.length) {
-        showDeadMoneyNotification(raw.deadMoneyAlerts);
+      // Strategy label
+      if (raw.strategyLabel) {
+        const stratEl = document.getElementById("faa-strategy");
+        if (stratEl) stratEl.textContent = raw.strategyLabel;
       }
     }
 
@@ -1336,31 +1320,6 @@
   // SECTION 5b: New Display Helpers
   // =========================================================
 
-  function updateRosterDisplay(roster) {
-    const el = document.getElementById("faa-roster");
-    if (!el) return;
-    const entries = Object.entries(roster).map(([slot, occupant]) => {
-      if (occupant) {
-        return `<span style="color:#e0e0e0">${slot}:</span> <span style="color:#00c853">${occupant}</span>`;
-      }
-      return `<span style="color:#e0e0e0">${slot}:</span> <span style="color:#555">—</span>`;
-    });
-    el.innerHTML = `<div style="font-weight:600;color:#e94560;margin-bottom:2px;font-size:10px">MY ROSTER</div>` + entries.join(" | ");
-  }
-
-  function updateTopRemainingDisplay(topRemaining) {
-    const el = document.getElementById("faa-top-remaining");
-    if (!el) return;
-    let html = '<div style="font-weight:600;color:#e94560;margin-bottom:2px;font-size:10px">TOP REMAINING</div>';
-    for (const [pos, players] of Object.entries(topRemaining)) {
-      const names = players.slice(0, 3).map(p =>
-        `${p.name} <span style="color:#00c853">$${p.fmv}</span>`
-      ).join(", ");
-      html += `<div><b>${pos}:</b> ${names || '<span style="color:#555">none</span>'}</div>`;
-    }
-    el.innerHTML = html;
-  }
-
   function appendAIReasoning(chunk) {
     const el = document.getElementById("faa-ai-reasoning");
     if (!el) return;
@@ -1384,7 +1343,7 @@
       BID_PLACED: "#e0e0e0",
       PLAYER_SOLD: "#00c853",
       BUDGET_ALERT: "#ffab00",
-      DEAD_MONEY: "#ff1744",
+
       MARKET_SHIFT: "#e94560",
     };
     const TYPE_ICONS = {
@@ -1392,7 +1351,7 @@
       BID_PLACED: "\u{1F4B5}",
       PLAYER_SOLD: "\u2705",
       BUDGET_ALERT: "\u26A0\uFE0F",
-      DEAD_MONEY: "\u{1F4B8}",
+
       MARKET_SHIFT: "\u{1F4C8}",
     };
     // Events arrive in chronological order (oldest first) — newest at bottom like a chat
@@ -1404,34 +1363,6 @@
     el.innerHTML = `<div style="font-weight:600;color:#e94560;margin-bottom:2px;font-size:10px">LIVE TICKER</div>` + html;
     // Auto-scroll to newest (bottom)
     el.scrollTop = el.scrollHeight;
-  }
-
-  function showDeadMoneyNotification(alerts) {
-    if (!alerts || !alerts.length) return;
-    const overlay = document.getElementById("faa-overlay");
-    if (overlay) {
-      overlay.style.borderColor = "#ff1744";
-      overlay.style.boxShadow = "0 0 25px rgba(255,23,68,0.6)";
-      setTimeout(() => {
-        overlay.style.borderColor = "#16213e";
-        overlay.style.boxShadow = "0 4px 20px rgba(0,0,0,0.5)";
-      }, 4000);
-    }
-    const adviceEl = document.getElementById("faa-advice");
-    if (adviceEl) {
-      const alertHtml = alerts.map(a =>
-        `<div style="background:#3a0a0a;border:1px solid #ff1744;border-radius:4px;padding:6px 8px;margin-bottom:4px;font-size:11px">` +
-        `<span style="color:#ff1744;font-weight:600">DEAD MONEY</span> ` +
-        `${a.team} paid <b>$${a.draft_price}</b> for ${a.player_name} ` +
-        `(FMV $${a.fmv_at_sale}, +${a.overpay_pct}% overpay)</div>`
-      ).join("");
-      adviceEl.insertAdjacentHTML("afterbegin", alertHtml);
-      // Auto-dismiss after 8 seconds
-      setTimeout(() => {
-        const deadDivs = adviceEl.querySelectorAll('div[style*="3a0a0a"]');
-        deadDivs.forEach(d => d.remove());
-      }, 8000);
-    }
   }
 
   function checkWatchListAlert(playerName) {
