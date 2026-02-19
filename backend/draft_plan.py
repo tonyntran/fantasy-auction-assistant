@@ -189,7 +189,8 @@ def _fallback_plan(state: "DraftState") -> dict:
     starter_needs = state.get_starter_need()
     my = state.my_team
     bench_spots = my.bench_spots_remaining
-    slots_to_fill = sum(1 for v in starter_needs.values() if v > 0)
+    open_slots = {pos: count for pos, count in starter_needs.items() if count > 0}
+    slots_to_fill = sum(open_slots.values())
     bench_reserve = bench_spots  # $1 per bench spot
 
     # Build spending plan from starter picks only
@@ -204,9 +205,18 @@ def _fallback_plan(state: "DraftState") -> dict:
         spending_by_pos[pos]["count"] += 1
         spending_by_pos[pos]["top_tier"] = min(spending_by_pos[pos]["top_tier"], pick.get("tier", 3))
 
+    # Ensure ALL open positions are represented, even if optimizer missed them
+    spendable = my.budget - bench_reserve
+    for pos, count in open_slots.items():
+        if pos not in spending_by_pos:
+            # Estimate budget from remaining players at this position
+            remaining = state.get_remaining_players(pos)[:count]
+            est_budget = sum(calculate_fmv(p, state) for p in remaining)
+            top_tier = remaining[0].projection.tier if remaining else 3
+            spending_by_pos[pos] = {"budget": round(est_budget), "count": count, "top_tier": top_tier}
+
     # Scale allocations up to use full spendable budget
     total_opt_cost = sum(info["budget"] for info in spending_by_pos.values())
-    spendable = my.budget - bench_reserve
     scale = spendable / total_opt_cost if total_opt_cost > 0 else 1.0
 
     spending_plan = []
@@ -276,6 +286,7 @@ async def _call_draft_plan_gemini(prompt: str) -> Optional[dict]:
             "temperature": 0.3,
             "maxOutputTokens": 2048,
             "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
 

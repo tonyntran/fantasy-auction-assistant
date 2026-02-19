@@ -4,17 +4,16 @@ function PlayerNewsBadges({ news }) {
   if (!news) return null
   return (
     <>
-      {news.team && <span className="opacity-40 text-[10px]">{news.team}</span>}
       {news.injury_status && (
         <span
           className={`badge badge-xs ${news.injury_status === 'Out' || news.injury_status === 'IR' ? 'badge-error' : 'badge-warning'}`}
           title={`${news.injury_status}${news.injury ? ` (${news.injury})` : ''}`}
         >
-          {news.injury_status}
+          {({ Questionable: 'Q', Doubtful: 'D', Out: 'O', IR: 'IR' })[news.injury_status] || news.injury_status}
         </span>
       )}
       {!news.injury_status && news.recent_news && (
-        <span className="badge badge-xs badge-info" title="Recent news — check Sleeper for details">NEW</span>
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-info" title="Recent news — check Sleeper for details" />
       )}
       {!news.active && !news.injury_status && (
         <span className="badge badge-xs badge-error">{news.status || 'Inactive'}</span>

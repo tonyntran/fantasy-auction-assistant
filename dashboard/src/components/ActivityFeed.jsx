@@ -48,7 +48,7 @@ export default function ActivityFeed({ events }) {
               <span className={`badge badge-xs ${TYPE_BADGE[e.event_type] || 'badge-ghost'} shrink-0 mt-0.5`}>
                 {TYPE_LABEL[e.event_type] || '?'}
               </span>
-              <span className="opacity-80 leading-tight">{e.message}</span>
+              <span className="opacity-80 leading-tight break-words min-w-0">{e.message}</span>
               {e.amount != null && (
                 <span className="ml-auto font-mono opacity-50 shrink-0">${Math.round(e.amount)}</span>
               )}

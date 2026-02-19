@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     adp_csv_path: str = ""
 
     # AI settings
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     claude_model: str = "claude-haiku-4-5-20251001"
     ai_timeout_ms: int = 8000
 

@@ -1,12 +1,14 @@
 const strategyBadges = {
   BUDGET_DRAIN: 'badge-error',
   RIVAL_DESPERATION: 'badge-warning',
+  POISON_PILL: 'badge-accent',
   BARGAIN_SNAG: 'badge-success',
 }
 
 const strategyLabels = {
   BUDGET_DRAIN: 'Drain',
   RIVAL_DESPERATION: 'Desperation',
+  POISON_PILL: 'Poison Pill',
   BARGAIN_SNAG: 'Bargain',
 }
 

@@ -173,6 +173,38 @@ def _build_summary(ctx: dict) -> str:
     return ". ".join(parts) if parts else ""
 
 
+def get_player_roster_info(player_name: str) -> dict:
+    """Get team abbreviation and bye week for any player (for roster display)."""
+    info = _find_player(player_name)
+    if not info:
+        return {}
+    team = info.get("team")
+    result = {}
+    if team:
+        result["team"] = team
+        # Sleeper metadata sometimes includes bye_week
+        meta = info.get("metadata") or {}
+        bye = meta.get("bye_week")
+        if bye is None:
+            bye = _NFL_BYE_WEEKS.get(team)
+        if bye is not None:
+            result["bye_week"] = int(bye)
+    return result
+
+
+# 2025 NFL bye weeks — update each season
+_NFL_BYE_WEEKS = {
+    "DET": 5, "LAC": 5,
+    "KC": 6, "LAR": 6,
+    "MIN": 7, "SEA": 7,
+    "CHI": 8, "DAL": 8,
+    "CLE": 9, "HOU": 9, "LV": 9, "TEN": 9,
+    "ATL": 10, "BUF": 10, "CIN": 10, "JAX": 10, "NO": 10, "NYJ": 10,
+    "ARI": 11, "CAR": 11, "NYG": 11, "PHI": 11, "PIT": 11, "SF": 11,
+    "BAL": 12, "DEN": 12, "GB": 12, "IND": 12, "MIA": 12, "NE": 12, "TB": 12, "WAS": 12,
+}
+
+
 def get_news_for_undrafted(state) -> dict:
     """Return context info for all undrafted players with notable news."""
     news_map = {}

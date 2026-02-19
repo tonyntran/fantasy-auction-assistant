@@ -402,7 +402,7 @@ async def manual_override(data: ManualInput):
             return {"status": "ok", "advice": '<b style="color:#aaa">No nomination suggestions available.</b>'}
         lines = ['<b style="color:#2196f3">NOMINATION SUGGESTIONS</b><br>']
         for i, s in enumerate(suggestions, 1):
-            color = {"BUDGET_DRAIN": "#ff9800", "RIVAL_DESPERATION": "#f44336", "BARGAIN_SNAG": "#4caf50"}.get(s["strategy"], "#aaa")
+            color = {"BUDGET_DRAIN": "#ff9800", "RIVAL_DESPERATION": "#f44336", "POISON_PILL": "#9c27b0", "BARGAIN_SNAG": "#4caf50"}.get(s["strategy"], "#aaa")
             lines.append(
                 f'{i}. <span style="color:{color}">[{s["strategy"]}]</span> '
                 f'<b>{s["player_name"]}</b> ({s["position"]}) — FMV ${s["fmv"]}<br>'
@@ -745,6 +745,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
                 "name": p.projection.player_name,
                 "fmv": round(calculate_fmv(p, state), 1),
                 "vorp": round(p.vorp, 1),
+                "pts_per_game": round(p.projection.projected_points / settings.season_games, 1),
                 "drop_off": drop_off,
             })
         # Flag tier breaks: drop-off > 1.5x the average gap in this group
@@ -941,9 +942,16 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         "players_total": total_players,
     }
 
+    # Augment my roster with team/bye info
+    my_team_data = state.my_team.model_dump()
+    for p in my_team_data.get("players_acquired", []):
+        roster_info = player_news.get_player_roster_info(p["name"])
+        p["team"] = roster_info.get("team")
+        p["bye_week"] = roster_info.get("bye_week")
+
     return {
         "players": players,
-        "my_team": state.my_team.model_dump(),
+        "my_team": my_team_data,
         "budgets": state.get_aliased_budgets(),
         "team_aliases": state.team_aliases,
         "inflation": round(state.get_inflation_factor(), 3),

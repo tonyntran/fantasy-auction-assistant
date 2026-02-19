@@ -311,6 +311,43 @@ def _has_ai_key() -> bool:
         return bool(settings.gemini_api_key and not settings.gemini_api_key.startswith("your-"))
 
 
+def _parse_ai_json(text: str) -> dict:
+    """Parse JSON from AI response, handling common LLM formatting issues."""
+    import re
+    cleaned = text.strip()
+    # Strip markdown code fences
+    if cleaned.startswith("```"):
+        first_nl = cleaned.index("\n") if "\n" in cleaned else 3
+        cleaned = cleaned[first_nl + 1:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+    # Try parsing as-is first
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    # Fix trailing commas before } or ]
+    fixed = re.sub(r',\s*([}\]])', r'\1', cleaned)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    # Fix single-quoted strings → double quotes (outside of already double-quoted strings)
+    fixed = re.sub(r"'", '"', fixed)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    # Strip // comments
+    fixed = re.sub(r'//[^\n]*', '', fixed)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        print(f"  [AI] Failed to parse JSON response:\n{text[:500]}")
+        raise
+
+
 async def _call_ai(prompt: str) -> Optional[dict]:
     """Route to the configured AI provider."""
     provider = settings.ai_provider.lower()
@@ -332,8 +369,9 @@ async def _call_gemini(prompt: str) -> Optional[dict]:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.3,
-            "maxOutputTokens": 512,
+            "maxOutputTokens": 1024,
             "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
 
@@ -345,7 +383,7 @@ async def _call_gemini(prompt: str) -> Optional[dict]:
 
     data = resp.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"]
-    return json.loads(text)
+    return _parse_ai_json(text)
 
 
 async def _call_claude(prompt: str) -> Optional[dict]:
@@ -358,7 +396,7 @@ async def _call_claude(prompt: str) -> Optional[dict]:
     }
     body = {
         "model": settings.claude_model,
-        "max_tokens": 512,
+        "max_tokens": 1024,
         "temperature": 0.3,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -369,16 +407,7 @@ async def _call_claude(prompt: str) -> Optional[dict]:
 
     data = resp.json()
     text = data["content"][0]["text"]
-
-    # Claude may wrap JSON in markdown code fences — strip them
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[-1]  # remove ```json line
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-    return json.loads(cleaned)
+    return _parse_ai_json(text)
 
 
 async def get_draft_grade(prompt: str) -> Optional[dict]:
