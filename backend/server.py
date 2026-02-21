@@ -417,7 +417,7 @@ async def manual_override(data: ManualInput):
                 f'<b>{s["player_name"]}</b> ({s["position"]}) — FMV ${s["fmv"]}<br>'
                 f'<span style="font-size:11px;color:#aaa">{s["reasoning"]}</span>'
             )
-        return {"status": "ok", "action": "suggest", "advice": "<br>".join(lines)}
+        return {"status": "ok", "action": "suggest", "advice": "<br>".join(lines), "suggestions": suggestions}
 
     # --- WHATIF: "whatif PlayerName Price" ---
     whatif_match = re.match(r"^whatif\s+(.+?)\s+(\d+)\s*$", cmd, re.IGNORECASE)
