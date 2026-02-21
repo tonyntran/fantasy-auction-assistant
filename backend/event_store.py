@@ -32,6 +32,13 @@ class EventStore:
         self._seq: int = 0
         self._file = None
 
+    @classmethod
+    def _reset_for_testing(cls):
+        """Reset the singleton instance. For test isolation only."""
+        if cls._instance is not None and cls._instance._file:
+            cls._instance._file.close()
+        cls._instance = None
+
     def open(self, path: str):
         """Open (or create) the event log file. Resumes sequence numbering."""
         self._path = Path(path)
@@ -39,8 +46,14 @@ class EventStore:
         if self._path.exists():
             with open(self._path, "r", encoding="utf-8") as f:
                 for line in f:
-                    if line.strip():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        json.loads(line)
                         self._seq += 1
+                    except json.JSONDecodeError:
+                        continue
         self._file = open(self._path, "a", encoding="utf-8")
 
     def append(self, event_type: str, payload: dict):

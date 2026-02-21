@@ -1,5 +1,8 @@
+import { useEffect, useRef } from 'react'
 import useDraftState, { API_BASE } from './hooks/useDraftState'
+import usePersistedState from './hooks/usePersistedState'
 import Header from './components/Header'
+import ErrorBoundary from './components/ErrorBoundary'
 import CurrentAdvice from './components/CurrentAdvice'
 import MyRoster from './components/MyRoster'
 import DraftBoard from './components/DraftBoard'
@@ -12,15 +15,42 @@ import ActivityFeed from './components/ActivityFeed'
 
 import VomLeaderboard from './components/VomLeaderboard'
 import RosterOptimizer from './components/RosterOptimizer'
+import DraftGrade from './components/DraftGrade'
+import ExportButton from './components/ExportButton'
+import ManualInput from './components/ManualInput'
 
 export default function App() {
   const { state, setState, connected, loading, refetch } = useDraftState()
+  const [savedStrategy, setSavedStrategy] = usePersistedState('strategy', null)
+  const restoredRef = useRef(false)
+
+  // Restore persisted strategy on initial load
+  useEffect(() => {
+    if (!restoredRef.current && state && savedStrategy && state.strategy !== savedStrategy) {
+      restoredRef.current = true
+      fetch(`${API_BASE}/strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy: savedStrategy })
+      }).then(() => refetch())
+    }
+  }, [state, savedStrategy, refetch])
 
   const setStrategy = async (strategy) => {
+    setSavedStrategy(strategy)
     await fetch(`${API_BASE}/strategy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ strategy })
+    })
+    refetch()
+  }
+
+  const setSheet = async (sheet) => {
+    await fetch(`${API_BASE}/projection-sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheet })
     })
     refetch()
   }
@@ -49,45 +79,86 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header state={state} connected={connected} onStrategyChange={setStrategy} />
+      <Header state={state} connected={connected} onStrategyChange={setStrategy} onSheetChange={setSheet} />
 
       <main className="flex-1 p-4 overflow-auto">
+        {/* Manual command input */}
+        <div className="mb-4">
+          <ErrorBoundary name="Manual Input">
+            <ManualInput onCommandSuccess={refetch} />
+          </ErrorBoundary>
+        </div>
+
         {/* Main layout: left content columns + right optimizer sidebar */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4 items-start">
           {/* Left 3 columns */}
           <div className="lg:col-span-3 space-y-4">
             {/* Row 1: Advice + Top Remaining + Ticker */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <CurrentAdvice advice={state.current_advice} positionalRun={state.positional_run} />
-              <TopRemaining topRemaining={state.top_remaining} playerNews={state.player_news} positionalVona={state.positional_vona} />
-              <ActivityFeed events={state.ticker_events} />
+              <ErrorBoundary name="Current Advice">
+                <CurrentAdvice advice={state.current_advice} positionalRun={state.positional_run} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Top Remaining">
+                <TopRemaining topRemaining={state.top_remaining} playerNews={state.player_news} positionalVona={state.positional_vona} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Activity Feed">
+                <ActivityFeed events={state.ticker_events} />
+              </ErrorBoundary>
             </div>
 
             {/* Row 2: Team Overview + My Roster + Scarcity */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <MyRoster myTeam={state.my_team} />
-              <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} moneyVelocity={state.money_velocity} />
-              <ScarcityHeatMap players={state.players} displayPositions={state.display_positions} />
+              <ErrorBoundary name="My Roster">
+                <MyRoster myTeam={state.my_team} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Team Overview">
+                <TeamOverview budgets={state.budgets} myTeam={state.my_team} opponentNeeds={state.opponent_needs} moneyVelocity={state.money_velocity} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Scarcity Heat Map">
+                <ScarcityHeatMap players={state.players} displayPositions={state.display_positions} />
+              </ErrorBoundary>
             </div>
 
             {/* Row 3: VOM Leaderboard + Sleeper Watch + Nomination */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <VomLeaderboard leaderboard={state.vom_leaderboard} />
-              <SleeperWatch sleepers={state.sleepers} />
-              <NominationPanel nominations={state.nominations} />
+              <ErrorBoundary name="VOM Leaderboard">
+                <VomLeaderboard leaderboard={state.vom_leaderboard} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Sleeper Watch">
+                <SleeperWatch sleepers={state.sleepers} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Nomination Panel">
+                <NominationPanel nominations={state.nominations} />
+              </ErrorBoundary>
             </div>
           </div>
 
-          {/* Right column: Optimizer + AI Plan pinned to top */}
+          {/* Right column: Optimizer + AI Plan + Draft Grade pinned to top */}
           <div className="lg:col-span-1">
-            <div className="lg:sticky lg:top-4">
-              <RosterOptimizer optimizer={state.optimizer} planStaleness={state.draft_plan_staleness} />
+            <div className="lg:sticky lg:top-4 space-y-4">
+              <ErrorBoundary name="Roster Optimizer">
+                <RosterOptimizer optimizer={state.optimizer} planStaleness={state.draft_plan_staleness} />
+              </ErrorBoundary>
+              <ErrorBoundary name="Draft Grade">
+                <DraftGrade
+                  myTeam={state.my_team}
+                  rosterSize={state.my_team?.roster ? Object.keys(state.my_team.roster).length : 0}
+                />
+              </ErrorBoundary>
+              <ErrorBoundary name="Export">
+                <ExportButton
+                  myTeam={state.my_team}
+                  rosterSize={state.my_team?.roster ? Object.keys(state.my_team.roster).length : 0}
+                />
+              </ErrorBoundary>
             </div>
           </div>
         </div>
 
         {/* Draft board: full width */}
-        <DraftBoard players={state.players} positions={state.positions} positionBadges={state.position_badges} playerNews={state.player_news} />
+        <ErrorBoundary name="Draft Board">
+          <DraftBoard players={state.players} positions={state.positions} positionBadges={state.position_badges} playerNews={state.player_news} />
+        </ErrorBoundary>
 
         {/* Glossary */}
         <div className="card bg-base-200 shadow-md mt-4">

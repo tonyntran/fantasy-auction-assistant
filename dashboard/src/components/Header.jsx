@@ -9,7 +9,7 @@ function PriceChip({ pos, data }) {
   )
 }
 
-export default function Header({ state, connected, onStrategyChange }) {
+export default function Header({ state, connected, onStrategyChange, onSheetChange }) {
   const budget = state?.my_team?.budget ?? '?'
   const total = state?.my_team?.total_budget ?? '?'
   const inflation = state?.inflation ?? 1
@@ -45,6 +45,18 @@ export default function Header({ state, connected, onStrategyChange }) {
           >
             {Object.entries(state.strategies).map(([key, s]) => (
               <option key={key} value={key}>{s.label}</option>
+            ))}
+          </select>
+        )}
+        {state?.available_sheets && state.available_sheets.length > 1 && (
+          <select
+            className="select select-sm select-bordered"
+            value={state?.active_sheet || ''}
+            onChange={(e) => onSheetChange(e.target.value)}
+            title="Projection source"
+          >
+            {state.available_sheets.map(s => (
+              <option key={s} value={s}>{s}</option>
             ))}
           </select>
         )}

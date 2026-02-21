@@ -6,18 +6,10 @@ and produces weighted-average ProjectedPoints and BaselineAAV.
 """
 
 import csv
-import re
 from pathlib import Path
 from typing import Optional
 
-
-def _normalize(name: str) -> str:
-    """Aggressive normalization for cross-source player matching."""
-    s = name.strip().lower()
-    s = re.sub(r"[.\-'']", "", s)
-    s = re.sub(r"\s+(jr\.?|sr\.?|ii|iii|iv|v|2nd|3rd)$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+from fuzzy_match import normalize_name
 
 
 def load_and_merge_projections(
@@ -48,7 +40,7 @@ def load_and_merge_projections(
             reader = csv.DictReader(f)
             for row in reader:
                 name = row["PlayerName"].strip()
-                key = _normalize(name)
+                key = normalize_name(name)
                 player_data.setdefault(key, []).append({
                     "weight": weight,
                     "points": float(row["ProjectedPoints"]),

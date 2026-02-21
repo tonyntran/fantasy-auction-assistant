@@ -4,4 +4,6 @@ pydantic-settings
 python-dotenv
 httpx
 rapidfuzz
-sse-starlette
+pytest
+pytest-asyncio
+pytest-cov

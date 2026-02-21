@@ -10,6 +10,7 @@ from typing import Optional
 import httpx
 
 _player_db: dict = {}
+_name_index: dict[str, dict] = {}  # full_name.lower() → player info (O(1) lookup)
 _last_fetch: float = 0
 _CACHE_TTL = 1800  # 30 minutes
 
@@ -19,12 +20,40 @@ _NEWS_RECENCY_HOURS = 72
 SLEEPER_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl"
 
 
+def _build_name_index(db: dict) -> dict[str, dict]:
+    """Build a name-indexed lookup from the Sleeper player database.
+
+    Maps full_name.lower() -> player info dict.  When multiple players
+    share the same name, prefer the entry that is active and has a team
+    assignment (i.e. the fantasy-relevant one).
+    """
+    index: dict[str, dict] = {}
+    for pid, info in db.items():
+        if not isinstance(info, dict):
+            continue
+        full = info.get("full_name")
+        if not full:
+            continue
+        key = full.lower()
+        existing = index.get(key)
+        if existing is None:
+            index[key] = info
+        else:
+            # Resolve duplicates: prefer active player with a team
+            new_score = (bool(info.get("active")), bool(info.get("team")))
+            old_score = (bool(existing.get("active")), bool(existing.get("team")))
+            if new_score > old_score:
+                index[key] = info
+    return index
+
+
 async def _fetch_players():
-    global _player_db, _last_fetch
+    global _player_db, _name_index, _last_fetch
     async with httpx.AsyncClient() as client:
         resp = await client.get(SLEEPER_PLAYERS_URL, timeout=30.0)
         resp.raise_for_status()
     _player_db = resp.json()
+    _name_index = _build_name_index(_player_db)
     _last_fetch = time.time()
 
 
@@ -39,8 +68,19 @@ async def ensure_loaded():
 
 def _find_player(player_name: str) -> Optional[dict]:
     """Look up a player by name in the Sleeper database.
-    When multiple players share a name, prefer active fantasy-relevant players."""
+    When multiple players share a name, prefer active fantasy-relevant players.
+
+    Uses a pre-built name index for O(1) exact-match lookup.  Falls back
+    to a linear scan if the index misses (e.g. alternate name formats).
+    """
     name_lower = player_name.lower().strip()
+
+    # Fast path: O(1) index lookup (handles duplicate-name resolution at build time)
+    hit = _name_index.get(name_lower)
+    if hit is not None:
+        return hit
+
+    # Slow fallback: linear scan for partial matches or names not in the index
     matches = []
     for pid, info in _player_db.items():
         if not isinstance(info, dict):
@@ -174,7 +214,13 @@ def _build_summary(ctx: dict) -> str:
 
 
 def get_player_roster_info(player_name: str) -> dict:
-    """Get team abbreviation and bye week for any player (for roster display)."""
+    """Get team abbreviation and bye week for any player (for roster display).
+
+    Bye week is sourced from the Sleeper player metadata, which is
+    updated each season automatically.  If Sleeper does not have a
+    bye_week for a player, it is simply omitted rather than showing
+    stale data from a previous season.
+    """
     info = _find_player(player_name)
     if not info:
         return {}
@@ -182,27 +228,12 @@ def get_player_roster_info(player_name: str) -> dict:
     result = {}
     if team:
         result["team"] = team
-        # Sleeper metadata sometimes includes bye_week
+        # Prefer metadata.bye_week (populated by Sleeper per-season)
         meta = info.get("metadata") or {}
         bye = meta.get("bye_week")
-        if bye is None:
-            bye = _NFL_BYE_WEEKS.get(team)
         if bye is not None:
             result["bye_week"] = int(bye)
     return result
-
-
-# 2025 NFL bye weeks — update each season
-_NFL_BYE_WEEKS = {
-    "DET": 5, "LAC": 5,
-    "KC": 6, "LAR": 6,
-    "MIN": 7, "SEA": 7,
-    "CHI": 8, "DAL": 8,
-    "CLE": 9, "HOU": 9, "LV": 9, "TEN": 9,
-    "ATL": 10, "BUF": 10, "CIN": 10, "JAX": 10, "NO": 10, "NYJ": 10,
-    "ARI": 11, "CAR": 11, "NYG": 11, "PHI": 11, "PIT": 11, "SF": 11,
-    "BAL": 12, "DEN": 12, "GB": 12, "IND": 12, "MIA": 12, "NE": 12, "TB": 12, "WAS": 12,
-}
 
 
 def get_news_for_undrafted(state) -> dict:

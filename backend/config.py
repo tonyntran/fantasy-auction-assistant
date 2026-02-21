@@ -3,6 +3,8 @@ Application settings loaded from .env file via pydantic-settings.
 Supports multiple sports (football, basketball) via SPORT_PROFILES.
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
 from pydantic import model_validator
 
@@ -111,13 +113,13 @@ _FOOTBALL_ELIGIBILITY = SPORT_PROFILES["football"]["slot_eligibility"]
 
 class Settings(BaseSettings):
     # Platform selection: "espn" or "sleeper"
-    platform: str = "espn"
+    platform: str = "sleeper"
 
     # Sport selection: "football", "basketball", or "auto" (detect from extension URL)
     sport: str = "football"
 
     # AI provider: "gemini" or "claude"
-    ai_provider: str = "gemini"
+    ai_provider: str = "claude"
 
     # API keys
     gemini_api_key: str = ""
@@ -150,6 +152,9 @@ class Settings(BaseSettings):
 
     # ADP comparison (path to ADP CSV; empty = disabled)
     adp_csv_path: str = ""
+
+    # Keeper league support (path to keepers CSV; empty = no keepers)
+    keepers_csv: str = ""
 
     # AI settings
     gemini_model: str = "gemini-2.5-flash"
@@ -194,6 +199,21 @@ class Settings(BaseSettings):
     @property
     def active_strategy(self) -> dict:
         return DRAFT_STRATEGIES.get(self.draft_strategy, DRAFT_STRATEGIES["balanced"])
+
+    @property
+    def available_sheets(self) -> dict[str, str]:
+        """Return {label: path} for all available projection sheets."""
+        sheets = {}
+        if self.csv_path:
+            name = Path(self.csv_path).stem
+            sheets[name] = self.csv_path
+        if self.csv_paths:
+            for p in self.csv_paths.split(","):
+                p = p.strip()
+                if p:
+                    name = Path(p).stem
+                    sheets[name] = p
+        return sheets
 
     @property
     def sport_profile(self) -> dict:

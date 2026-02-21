@@ -13,12 +13,11 @@ import json
 import time
 from typing import Optional, TYPE_CHECKING
 
-import httpx
-
 if TYPE_CHECKING:
     from state import DraftState
 
 from config import settings
+from ai_advisor import get_http_client
 from engine import calculate_fmv
 from roster_optimizer import get_optimal_plan
 
@@ -290,11 +289,11 @@ async def _call_draft_plan_gemini(prompt: str) -> Optional[dict]:
         },
     }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            url, json=body, params=params, headers=headers, timeout=15.0
-        )
-        resp.raise_for_status()
+    client = get_http_client()
+    resp = await client.post(
+        url, json=body, params=params, headers=headers, timeout=15.0
+    )
+    resp.raise_for_status()
 
     data = resp.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -318,9 +317,9 @@ async def _call_draft_plan_claude(prompt: str) -> Optional[dict]:
         "messages": [{"role": "user", "content": prompt}],
     }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=body, headers=headers, timeout=15.0)
-        resp.raise_for_status()
+    client = get_http_client()
+    resp = await client.post(url, json=body, headers=headers, timeout=15.0)
+    resp.raise_for_status()
 
     data = resp.json()
     text = data["content"][0]["text"]

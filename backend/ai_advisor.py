@@ -21,6 +21,28 @@ from config import settings
 from engine import get_engine_advice
 
 
+# Dynamic label for the configured AI provider (used in log/print output)
+_provider_label: str = settings.ai_provider.capitalize()
+
+# Module-level shared HTTP client for AI API calls (lazy-initialized)
+_http_client: httpx.AsyncClient | None = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    """Return a shared httpx.AsyncClient, creating it on first use."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient()
+    return _http_client
+
+
+async def close_http_client():
+    """Gracefully close the shared HTTP client (call on app shutdown)."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
 # In-memory cache: player_name_lower -> (FullAdvice, timestamp)
 # Keyed only by player name — one AI call per nomination, not per bid change
 _advice_cache: dict[str, tuple[FullAdvice, float]] = {}
@@ -97,7 +119,7 @@ def _build_context(
     other_needs = {}
     for slot, occupant in my.roster.items():
         if occupant is None:
-            base = slot.split()[0]
+            base = my.slot_types.get(slot, slot.rstrip("0123456789"))
             if base not in other_needs:
                 remaining = state.get_remaining_players(base)[:3]
                 other_needs[base] = [
@@ -108,7 +130,7 @@ def _build_context(
     # Roster composition summary
     filled_positions = {}
     for slot, occupant in my.roster.items():
-        base = slot.split()[0] if slot else slot
+        base = my.slot_types.get(slot, slot.rstrip("0123456789")) if slot else slot
         if base not in filled_positions:
             filled_positions[base] = {"filled": 0, "total": 0}
         filled_positions[base]["total"] += 1
@@ -204,12 +226,12 @@ async def get_ai_advice(
     engine_advice: EngineAdvice,
 ) -> FullAdvice:
     """
-    Call Gemini for AI-enhanced advice. Falls back to engine-only if:
+    Call the configured AI provider for AI-enhanced advice. Falls back to engine-only if:
     - No API key configured
-    - Gemini takes > ai_timeout_ms
-    - Gemini returns invalid JSON
+    - AI takes > ai_timeout_ms
+    - AI returns invalid JSON
 
-    Keyed by player name only — one Gemini call per nomination.
+    Keyed by player name only — one AI call per nomination.
     Bid changes are handled by the engine; AI provides strategic context.
     """
     cache_key = player_name.lower().strip()
@@ -262,15 +284,15 @@ async def get_ai_advice(
             )
             _advice_cache[cache_key] = (advice, time.time())
             ai_status = "ok"
-            print(f"  [AI] Gemini advice for {player_name}: {advice.action.value}, max ${advice.max_bid}")
+            print(f"  [AI] {_provider_label} advice for {player_name}: {advice.action.value}, max ${advice.max_bid}")
             return advice
 
     except asyncio.TimeoutError:
         ai_status = f"timeout ({settings.ai_timeout_ms}ms)"
-        print(f"  [AI] Gemini timeout for {player_name} ({settings.ai_timeout_ms}ms)")
+        print(f"  [AI] {_provider_label} timeout for {player_name} ({settings.ai_timeout_ms}ms)")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
-            # Parse Google's error to distinguish RPM vs daily quota
+            # Parse error to distinguish RPM vs daily quota
             reason = ""
             try:
                 err_body = e.response.json()
@@ -283,17 +305,17 @@ async def get_ai_advice(
                 # Daily quota — don't retry until tomorrow
                 _rate_limit_until = time.time() + 3600  # pause for 1 hour
                 ai_status = "daily quota exhausted"
-                print(f"  [AI] Gemini daily quota exhausted — disabling AI for 1h. Detail: {reason[:150]}")
+                print(f"  [AI] {_provider_label} daily quota exhausted — disabling AI for 1h. Detail: {reason[:150]}")
             else:
                 _rate_limit_until = time.time() + _RATE_LIMIT_BACKOFF_SECONDS
                 ai_status = f"rate_limited ({_RATE_LIMIT_BACKOFF_SECONDS}s)"
-                print(f"  [AI] Gemini 429 rate limited — pausing {_RATE_LIMIT_BACKOFF_SECONDS}s. Detail: {reason[:150]}")
+                print(f"  [AI] {_provider_label} 429 rate limited — pausing {_RATE_LIMIT_BACKOFF_SECONDS}s. Detail: {reason[:150]}")
         else:
             ai_status = f"error: HTTP {e.response.status_code}"
-            print(f"  [AI] Gemini HTTP {e.response.status_code} for {player_name}")
+            print(f"  [AI] {_provider_label} HTTP {e.response.status_code} for {player_name}")
     except Exception as e:
         ai_status = f"error: {type(e).__name__}"
-        print(f"  [AI] Gemini error for {player_name}: {type(e).__name__}: {e}")
+        print(f"  [AI] {_provider_label} error for {player_name}: {type(e).__name__}: {e}")
     finally:
         _inflight.discard(cache_key)
 
@@ -375,11 +397,11 @@ async def _call_gemini(prompt: str) -> Optional[dict]:
         },
     }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            url, json=body, params=params, headers=headers, timeout=10.0
-        )
-        resp.raise_for_status()
+    client = get_http_client()
+    resp = await client.post(
+        url, json=body, params=params, headers=headers, timeout=10.0
+    )
+    resp.raise_for_status()
 
     data = resp.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -401,9 +423,9 @@ async def _call_claude(prompt: str) -> Optional[dict]:
         "messages": [{"role": "user", "content": prompt}],
     }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=body, headers=headers, timeout=10.0)
-        resp.raise_for_status()
+    client = get_http_client()
+    resp = await client.post(url, json=body, headers=headers, timeout=10.0)
+    resp.raise_for_status()
 
     data = resp.json()
     text = data["content"][0]["text"]
@@ -449,11 +471,11 @@ async def _call_gemini_text(prompt: str, timeout: float = 5.0) -> Optional[dict]
         },
     }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            url, json=body, params=params, headers=headers, timeout=timeout
-        )
-        resp.raise_for_status()
+    client = get_http_client()
+    resp = await client.post(
+        url, json=body, params=params, headers=headers, timeout=timeout
+    )
+    resp.raise_for_status()
 
     data = resp.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"]

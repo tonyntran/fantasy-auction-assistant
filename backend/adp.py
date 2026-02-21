@@ -6,18 +6,10 @@ If FMV says $30 but ADP implies $45, the player will likely go for more.
 """
 
 import csv
-import re
 from pathlib import Path
 from typing import Optional
 
-
-def _normalize(name: str) -> str:
-    """Aggressive normalization for cross-source matching."""
-    s = name.strip().lower()
-    s = re.sub(r"[.\-'']", "", s)
-    s = re.sub(r"\s+(jr\.?|sr\.?|ii|iii|iv|v|2nd|3rd)$", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+from fuzzy_match import normalize_name
 
 
 def load_adp_from_csv(csv_path: str) -> dict[str, float]:
@@ -44,7 +36,7 @@ def load_adp_from_csv(csv_path: str) -> dict[str, float]:
                 value = float(value_str)
             except ValueError:
                 continue
-            result[_normalize(name)] = value
+            result[normalize_name(name)] = value
 
     return result
 

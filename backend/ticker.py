@@ -54,6 +54,11 @@ class TickerBuffer:
         self._last_nomination: Optional[str] = None
         self._last_bid: Optional[tuple] = None
 
+    @classmethod
+    def _reset_for_testing(cls):
+        """Reset the singleton instance. For test isolation only."""
+        cls._instance = None
+
     def push(self, event: TickerEvent):
         """Append an event, evict oldest if buffer is full."""
         self.events.append(event)

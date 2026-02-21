@@ -43,6 +43,7 @@ export default function MyRoster({ myTeam }) {
         <span className="opacity-50 w-12">{label}</span>
         <span className={`flex-1 ${player ? 'font-medium' : 'opacity-30'}`}>
           {player || '—'}
+          {pick?.is_keeper && <span className="badge badge-xs badge-accent ml-1">K</span>}
           {pick?.team && (
             <span className="ml-1 opacity-30 text-[10px] font-normal">{pick.team}{pick.bye_week != null ? ` bye ${pick.bye_week}` : ''}</span>
           )}

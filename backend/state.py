@@ -18,7 +18,7 @@ from models import (
     TeamInfo,
 )
 from config import settings
-from fuzzy_match import NameResolver
+from fuzzy_match import NameResolver, normalize_name
 from opponent_model import OpponentTracker
 
 
@@ -86,6 +86,9 @@ class DraftState:
         # Resolved sport for auto-detect mode
         self.resolved_sport: str = settings.sport
 
+        # Active projection sheet label
+        self.active_sheet: Optional[str] = None
+
     def resolve_sport(self, detected_sport: Optional[str]):
         """Resolve sport from extension auto-detection if config is 'auto'."""
         if self.resolved_sport not in ("auto", ""):
@@ -107,6 +110,11 @@ class DraftState:
         else:
             self.resolved_sport = "football"
 
+    @classmethod
+    def _reset_for_testing(cls):
+        """Reset the singleton instance. For test isolation only."""
+        cls._instance = None
+
     # -----------------------------------------------------------------
     # Reset (for replay from scratch)
     # -----------------------------------------------------------------
@@ -118,6 +126,7 @@ class DraftState:
             ps.is_drafted = False
             ps.draft_price = None
             ps.drafted_by_team = None
+            ps.is_keeper = False
         self.team_budgets.clear()
         self.my_team.budget = self.my_team.total_budget
         self.my_team.roster = {slot: None for slot in settings.parsed_roster_slots}
@@ -143,10 +152,43 @@ class DraftState:
             rows = list(reader)
 
         self._load_rows(rows)
+        self.active_sheet = path.stem
 
     def load_from_merged(self, rows: list[dict]):
         """Load from pre-merged projection dicts (multi-source)."""
         self._load_rows(rows)
+
+    def reload_projections(self, csv_path: str):
+        """Reload projections from a different CSV, preserving draft state.
+
+        Keeps: drafted status, prices, team assignments, roster
+        Recomputes: projections, VORP, VONA, FMV, replacement levels
+        """
+        # Save current draft state
+        drafted_players = {}
+        for key, ps in self.players.items():
+            if ps.is_drafted:
+                drafted_players[key] = {
+                    "draft_price": ps.draft_price,
+                    "drafted_by_team": ps.drafted_by_team,
+                    "is_keeper": getattr(ps, "is_keeper", False),
+                }
+
+        # Reload projections (this replaces self.players)
+        self.load_projections(csv_path)
+
+        # Re-apply draft state
+        for key, draft_info in drafted_players.items():
+            ps = self.players.get(key)
+            if ps:
+                ps.is_drafted = True
+                ps.draft_price = draft_info["draft_price"]
+                ps.drafted_by_team = draft_info["drafted_by_team"]
+                if hasattr(ps, "is_keeper"):
+                    ps.is_keeper = draft_info.get("is_keeper", False)
+
+        # Recompute everything
+        self._recompute_aggregates()
 
     def _load_rows(self, rows: list[dict]):
         """Shared loader for CSV rows or merged dicts."""
@@ -174,8 +216,8 @@ class DraftState:
 
     @staticmethod
     def _normalize_name(name: str) -> str:
-        """Lowercase, strip whitespace and trailing periods."""
-        return name.lower().strip().rstrip(".")
+        """Delegate to the canonical normalize_name in fuzzy_match."""
+        return normalize_name(name)
 
     # -----------------------------------------------------------------
     # VORP Pre-Computation

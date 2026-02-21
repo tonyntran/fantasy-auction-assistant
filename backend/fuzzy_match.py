@@ -69,14 +69,14 @@ class NameResolver:
     def build_index(self, players: dict[str, object]):
         """
         Build the matching index from the state's player dict.
-        `players` is keyed by the state's _normalize_name() output.
+        `players` is keyed by normalize_name() output.
         """
         self._normalized_to_canonical.clear()
         self._cache.clear()
         self._corpus.clear()
 
         for canonical_key, ps in players.items():
-            # The canonical key is already state._normalize_name(csv_name)
+            # The canonical key is already normalize_name(csv_name)
             # We also store an aggressively normalized version for matching
             display_name = ps.projection.player_name
             aggressive = normalize_name(display_name)
@@ -131,12 +131,11 @@ class NameResolver:
         self._cache[incoming_name] = None
         return None
 
-    def resolve_or_original(self, incoming_name: str, fallback_normalize) -> str:
+    def resolve_or_original(self, incoming_name: str) -> str:
         """
-        Resolve to canonical key, or fall back to the original normalization.
-        `fallback_normalize` is the state's _normalize_name function.
+        Resolve to canonical key, or fall back to normalize_name().
         """
         resolved = self.resolve(incoming_name)
         if resolved is not None:
             return resolved
-        return fallback_normalize(incoming_name)
+        return normalize_name(incoming_name)

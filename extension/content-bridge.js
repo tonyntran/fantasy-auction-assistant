@@ -29,6 +29,30 @@
       return;
     }
 
+    // Handle overlay position request from MAIN world
+    if (event.data.payload?.requestOverlayPosition) {
+      chrome.storage.sync.get({ overlayPosition: "top-right" }).then((result) => {
+        window.postMessage(
+          {
+            type: MESSAGE_TYPE,
+            direction: "from-bridge",
+            payload: { overlayPosition: result.overlayPosition },
+          },
+          "*"
+        );
+      }).catch(() => {
+        window.postMessage(
+          {
+            type: MESSAGE_TYPE,
+            direction: "from-bridge",
+            payload: { overlayPosition: "top-right" },
+          },
+          "*"
+        );
+      });
+      return;
+    }
+
     // Handle Sleeper player cache: save to chrome.storage.local
     if (event.data.payload?.cacheSleeperPlayers) {
       chrome.storage.local.set({
@@ -127,6 +151,24 @@
       sendResponse({ received: true });
     }
     return true;
+  });
+
+  // =========================================================
+  // Settings change listener — relay overlay position updates in real time
+  // =========================================================
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "sync") return;
+    if (changes.overlayPosition) {
+      window.postMessage(
+        {
+          type: MESSAGE_TYPE,
+          direction: "from-bridge",
+          payload: { overlayPosition: changes.overlayPosition.newValue },
+        },
+        "*"
+      );
+    }
   });
 
   console.log("[Fantasy Auction Assistant] Bridge script loaded (ISOLATED world)");

@@ -989,10 +989,39 @@
     setupManualInput();
   }
 
+  function applyOverlayPosition(position) {
+    if (!overlayElement) return;
+    // Reset all corner positions
+    overlayElement.style.top = "auto";
+    overlayElement.style.right = "auto";
+    overlayElement.style.bottom = "auto";
+    overlayElement.style.left = "auto";
+
+    switch (position) {
+      case "top-left":
+        overlayElement.style.top = "10px";
+        overlayElement.style.left = "10px";
+        break;
+      case "bottom-right":
+        overlayElement.style.bottom = "10px";
+        overlayElement.style.right = "10px";
+        break;
+      case "bottom-left":
+        overlayElement.style.bottom = "10px";
+        overlayElement.style.left = "10px";
+        break;
+      case "top-right":
+      default:
+        overlayElement.style.top = "10px";
+        overlayElement.style.right = "10px";
+        break;
+    }
+  }
+
   function applyInlineStyles() {
     const el = overlayElement;
     el.style.cssText = `
-      position: fixed; top: 20px; right: 20px; width: 340px;
+      position: fixed; top: 10px; right: 10px; width: 340px;
       max-height: 460px; background: #1a1a2e; color: #e0e0e0;
       border: 1px solid #16213e; border-radius: 8px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 999999;
@@ -1103,6 +1132,7 @@
       el.style.left = e.clientX - offsetX + "px";
       el.style.top = e.clientY - offsetY + "px";
       el.style.right = "auto";
+      el.style.bottom = "auto";
     });
 
     document.addEventListener("mouseup", () => {
@@ -1262,6 +1292,7 @@
     if (p.advice) updateOverlayAdvice(p.advice);
     if (p.connected !== undefined) updateOverlayStatus(p.connected);
     if (p.cssURL) injectCSS(p.cssURL);
+    if (p.overlayPosition) applyOverlayPosition(p.overlayPosition);
 
     // New response fields from server
     const raw = p.raw;
@@ -1519,8 +1550,9 @@
     }
 
     setInterval(poll, POLL_INTERVAL_MS);
-    // Request CSS URL from bridge
+    // Request CSS URL and overlay position from bridge
     sendToBridge({ requestCSS: true });
+    sendToBridge({ requestOverlayPosition: true });
   }
 
   // For Sleeper (document_start), the WebSocket interceptor is already installed above.

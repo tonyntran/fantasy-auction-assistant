@@ -15,7 +15,7 @@ from typing import Optional
 
 import re
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -23,7 +23,7 @@ from models import DraftUpdate, FullAdvice
 from config import settings, DRAFT_STRATEGIES
 from state import DraftState
 from engine import get_engine_advice
-from ai_advisor import get_ai_advice, precompute_advice, ai_status as _ai_status_ref
+from ai_advisor import get_ai_advice, precompute_advice, ai_status as _ai_status_ref, close_http_client
 import ai_advisor as _ai_advisor_mod
 from event_store import EventStore
 from projections import load_and_merge_projections
@@ -51,9 +51,11 @@ async def lifespan(app: FastAPI):
             weights = [float(w) for w in settings.projection_weights.split(",") if w.strip()]
         merged = load_and_merge_projections(paths, weights)
         state.load_from_merged(merged)
+        state.active_sheet = "merged"
         print(f"  Multi-source: merged {len(paths)} CSVs")
     else:
         state.load_projections(settings.csv_path)
+        # active_sheet is set inside load_projections via path.stem
 
     # Load ADP data if configured
     if settings.adp_csv_path:
@@ -66,6 +68,12 @@ async def lifespan(app: FastAPI):
                 player.adp_value = adp_val
                 matched += 1
         print(f"  ADP loaded: {matched}/{len(adp_data)} players matched")
+
+    # Load keepers (must happen AFTER projections, BEFORE event replay)
+    from keepers import load_keepers
+    keepers = load_keepers(state)
+    if keepers:
+        print(f"  [Keepers] Loaded {len(keepers)} keeper(s)")
 
     # Load player news/injury data from Sleeper API
     await player_news.ensure_loaded()
@@ -116,6 +124,7 @@ async def lifespan(app: FastAPI):
     print(f"  AI Provider:     {ai_display}")
     print(f"{'='*60}\n")
     yield
+    await close_http_client()
     event_store.close()
 
 
@@ -542,6 +551,28 @@ async def set_strategy(request: dict):
     return {"strategy": strategy, "label": DRAFT_STRATEGIES[strategy]["label"]}
 
 
+@app.post("/projection-sheet")
+async def switch_projection_sheet(body: dict):
+    """Switch the active projection sheet and recompute all values."""
+    sheet_name = body.get("sheet")
+    available = settings.available_sheets
+
+    if sheet_name not in available:
+        raise HTTPException(400, f"Unknown sheet: {sheet_name}. Available: {list(available.keys())}")
+
+    path = available[sheet_name]
+    state = DraftState()
+
+    # Reload projections from the new sheet, preserving draft progress
+    state.reload_projections(path)
+
+    # Broadcast updated snapshot to WebSocket dashboard clients
+    snapshot = _get_dashboard_snapshot(state)
+    await _broadcast_ws({"type": "state_snapshot", "data": snapshot})
+
+    return {"active_sheet": sheet_name, "player_count": len(state.players)}
+
+
 @app.get("/opponents")
 async def get_opponents():
     """View opponent positional needs and threat levels."""
@@ -596,6 +627,90 @@ async def grade():
     return _build_engine_grade(state)
 
 
+@app.get("/export")
+async def export_draft_results(format: str = "json"):
+    """Export draft results as JSON or CSV."""
+    from engine import calculate_fmv
+    import io
+    import csv as csv_mod
+    from starlette.responses import StreamingResponse
+
+    state = DraftState()
+
+    # Build export data from all drafted players
+    picks = []
+    for key, ps in state.players.items():
+        if ps.is_drafted:
+            fmv = calculate_fmv(ps, state)
+            picks.append({
+                "player": ps.projection.player_name,
+                "position": ps.projection.position.value,
+                "team": ps.drafted_by_team or "Unknown",
+                "price": ps.draft_price,
+                "fmv": round(fmv, 1),
+                "vorp": round(ps.vorp, 1),
+                "vom": round(fmv - ps.draft_price, 1) if ps.draft_price else 0,
+                "projected_points": round(ps.projection.projected_points, 1),
+                "is_keeper": getattr(ps, "is_keeper", False),
+            })
+
+    picks.sort(key=lambda p: p["price"], reverse=True)
+
+    my_team_aliases = [a.strip().lower() for a in settings.my_team_name.split(",")]
+    my_picks = [p for p in picks if p["team"].lower() in my_team_aliases]
+    export = {
+        "draft_date": datetime.now().isoformat(),
+        "league_size": settings.league_size,
+        "budget": settings.budget,
+        "platform": settings.platform,
+        "my_team": settings.my_team_name,
+        "total_picks": len(picks),
+        "picks": picks,
+        "my_picks": my_picks,
+        "summary": {
+            "total_spent": sum(p["price"] for p in my_picks),
+            "total_projected_points": sum(p["projected_points"] for p in my_picks),
+            "total_vom": sum(p["vom"] for p in my_picks),
+        },
+    }
+
+    if format == "csv":
+        output = io.StringIO()
+        fieldnames = ["player", "position", "team", "price", "fmv", "vorp", "vom", "projected_points", "is_keeper"]
+        writer = csv_mod.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(picks)
+
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=draft_results.csv"},
+        )
+
+    # Auto-save to data/historical/ for JSON exports
+    _auto_save_historical(export)
+
+    return export
+
+
+def _auto_save_historical(export: dict):
+    """Auto-save draft results for future historical reference."""
+    from pathlib import Path
+
+    hist_dir = Path("data/historical")
+    hist_dir.mkdir(parents=True, exist_ok=True)
+
+    date_str = export["draft_date"][:10]  # YYYY-MM-DD
+    filename = f"draft_{date_str}_{export['platform']}.json"
+    filepath = hist_dir / filename
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(export, f, indent=2, default=str)
+
+    print(f"[Export] Draft results saved to {filepath}")
+
+
 @app.get("/optimize")
 async def optimize():
     """Optimal remaining picks given current budget and needs."""
@@ -645,6 +760,7 @@ async def root():
             "GET /whatif?player=<name>&price=<int>": "What-if draft simulation",
             "GET /grade": "Post-draft team grade",
             "GET /stream/{player}?bid={bid}": "SSE streaming AI advice",
+            "GET /export?format=json|csv": "Export draft results as JSON or CSV",
             "GET /draft-plan": "On-demand AI draft plan with spending analysis",
             "GET /dashboard/state": "Full dashboard state snapshot",
             "WS /ws": "WebSocket for real-time updates",
@@ -654,16 +770,18 @@ async def root():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    """WebSocket for future real-time UIs. Accepts draft updates and broadcasts advice."""
+    """Subscription-only WebSocket for real-time dashboard updates.
+
+    This handler is read-only: it pushes snapshots to clients via
+    _broadcast_ws() but does NOT accept or process incoming mutations.
+    State changes arrive through the HTTP POST /draft_update endpoint.
+    """
     await ws.accept()
     ws_clients.append(ws)
     try:
         while True:
-            data = await ws.receive_json()
-            if "currentNomination" in data:
-                update = DraftUpdate(**data)
-                state = DraftState()
-                state.update_from_draft_event(update)
+            # Keep the connection alive; incoming messages are ignored.
+            await ws.receive_text()
     except WebSocketDisconnect:
         if ws in ws_clients:
             ws_clients.remove(ws)
@@ -707,13 +825,10 @@ async def _broadcast_ws(message: dict):
         ws_clients.remove(ws)
 
 
-def _get_dashboard_snapshot(state: DraftState) -> dict:
-    """Build a comprehensive state snapshot for the web dashboard."""
-    from sleeper_watch import get_sleeper_candidates
-    from nomination import get_nomination_suggestions
-    from engine import calculate_fmv, get_positional_vona_summary
+def _build_player_list(state: DraftState) -> list[dict]:
+    """Build the list of all players with FMV, VORP, VONA, tier, and draft status."""
+    from engine import calculate_fmv
 
-    # All players with status
     players = []
     for key, ps in state.players.items():
         players.append({
@@ -725,14 +840,20 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
             "fmv": round(calculate_fmv(ps, state), 1),
             "vorp": round(ps.vorp, 1),
             "is_drafted": ps.is_drafted,
+            "is_keeper": ps.is_keeper,
             "draft_price": ps.draft_price,
             "drafted_by": state.apply_alias(ps.drafted_by_team),
             "adp_value": ps.adp_value,
             "vona": round(ps.vona, 1),
             "vona_next_player": ps.vona_next_player,
         })
+    return players
 
-    # Top remaining by position
+
+def _build_top_remaining(state: DraftState) -> dict[str, list[dict]]:
+    """Build the top 5 undrafted players per position with tier-break flags."""
+    from engine import calculate_fmv
+
     top_remaining = {}
     for pos in settings.display_positions:
         remaining = state.get_remaining_players(pos)[:5]
@@ -754,8 +875,11 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         for e in entries:
             e["tier_break"] = e["drop_off"] is not None and avg_gap > 0 and e["drop_off"] > avg_gap * 1.5
         top_remaining[pos] = entries
+    return top_remaining
 
-    # Apply team aliases to ticker events
+
+def _build_ticker_events(state: DraftState) -> list[dict]:
+    """Get recent ticker events with team aliases applied."""
     ticker_events = TickerBuffer().get_recent(20)
     for evt in ticker_events:
         if evt.get("team_name"):
@@ -763,71 +887,79 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         if evt.get("message"):
             for orig, alias in state.team_aliases.items():
                 evt["message"] = evt["message"].replace(orig, alias)
+    return ticker_events
 
-    # Current nomination advice (if someone is on the block)
-    # Always include both engine_reasoning and ai_reasoning separately
-    current_advice = None
+
+def _build_current_advice(state: DraftState) -> Optional[dict]:
+    """Build advice dict for the currently nominated player, merging engine and cached AI."""
+    from engine import get_engine_advice
+
     raw_nom = state.raw_latest.get("currentNomination")
-    if raw_nom and isinstance(raw_nom, dict) and raw_nom.get("playerName"):
-        nom_player = raw_nom["playerName"]
-        nom_bid = state.raw_latest.get("currentBid") or 0
-        nom_bidder = state.raw_latest.get("highBidder")
-        try:
-            engine_advice = get_engine_advice(nom_player, nom_bid, state)
+    if not (raw_nom and isinstance(raw_nom, dict) and raw_nom.get("playerName")):
+        return None
 
-            # Player news for nominated player
-            nom_news = player_news.get_player_status(nom_player)
+    nom_player = raw_nom["playerName"]
+    nom_bid = state.raw_latest.get("currentBid") or 0
+    nom_bidder = state.raw_latest.get("highBidder")
+    try:
+        engine_advice = get_engine_advice(nom_player, nom_bid, state)
 
-            # Look up the player object for extra fields
-            nom_player_obj = state.get_player(nom_player)
-            nom_pos = nom_player_obj.projection.position.value if nom_player_obj else None
+        # Player news for nominated player
+        nom_news = player_news.get_player_status(nom_player)
 
-            # Base advice from engine (always present)
-            current_advice = {
-                "player": nom_player,
-                "current_bid": nom_bid,
-                "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
-                "action": engine_advice.action.value,
-                "max_bid": engine_advice.max_bid,
-                "fmv": engine_advice.fmv,
-                "base_fmv": engine_advice.base_fmv,
-                "baseline_aav": nom_player_obj.projection.baseline_aav if nom_player_obj else None,
-                "inflation_rate": round(state.get_inflation_factor(), 3),
-                "engine_reasoning": engine_advice.reasoning,
-                "ai_reasoning": None,
-                "reasoning": engine_advice.reasoning,
-                "vona": engine_advice.vona,
-                "vona_next_player": engine_advice.vona_next_player,
-                "scarcity_multiplier": engine_advice.scarcity_multiplier,
-                "strategy_multiplier": engine_advice.strategy_multiplier,
-                "vorp": engine_advice.vorp,
-                "vorp_per_game": round(engine_advice.vorp / settings.season_games, 1) if engine_advice.vorp else 0,
-                "vorp_replacement_player": state.replacement_player.get(nom_pos) if nom_pos else None,
-                "vona_per_game": round(engine_advice.vona / settings.season_games, 1) if engine_advice.vona else 0,
-                "surplus_value": round(engine_advice.fmv - nom_bid, 1) if nom_bid > 0 and engine_advice.fmv else None,
-                "adp_vs_fmv": engine_advice.adp_vs_fmv,
-                "opponent_demand": engine_advice.opponent_demand,
-                "source": "engine",
-                "player_news": nom_news,
-            }
+        # Look up the player object for extra fields
+        nom_player_obj = state.get_player(nom_player)
+        nom_pos = nom_player_obj.projection.position.value if nom_player_obj else None
 
-            # Overlay AI advice if cached
-            from ai_advisor import _advice_cache, CACHE_TTL_SECONDS
-            cache_key = nom_player.lower().strip()
-            ai_cached = _advice_cache.get(cache_key)
-            if ai_cached and (time.time() - ai_cached[1]) < CACHE_TTL_SECONDS:
-                ai = ai_cached[0]
-                current_advice["action"] = ai.action.value
-                current_advice["max_bid"] = ai.max_bid
-                current_advice["ai_reasoning"] = ai.reasoning
-                current_advice["reasoning"] = ai.reasoning
-                current_advice["source"] = ai.source
-        except Exception:
-            pass
+        # Base advice from engine (always present)
+        current_advice = {
+            "player": nom_player,
+            "current_bid": nom_bid,
+            "high_bidder": state.apply_alias(str(nom_bidder)) if nom_bidder else None,
+            "action": engine_advice.action.value,
+            "max_bid": engine_advice.max_bid,
+            "fmv": engine_advice.fmv,
+            "base_fmv": engine_advice.base_fmv,
+            "baseline_aav": nom_player_obj.projection.baseline_aav if nom_player_obj else None,
+            "inflation_rate": round(state.get_inflation_factor(), 3),
+            "engine_reasoning": engine_advice.reasoning,
+            "ai_reasoning": None,
+            "reasoning": engine_advice.reasoning,
+            "vona": engine_advice.vona,
+            "vona_next_player": engine_advice.vona_next_player,
+            "scarcity_multiplier": engine_advice.scarcity_multiplier,
+            "strategy_multiplier": engine_advice.strategy_multiplier,
+            "vorp": engine_advice.vorp,
+            "vorp_per_game": round(engine_advice.vorp / settings.season_games, 1) if engine_advice.vorp else 0,
+            "vorp_replacement_player": state.replacement_player.get(nom_pos) if nom_pos else None,
+            "vona_per_game": round(engine_advice.vona / settings.season_games, 1) if engine_advice.vona else 0,
+            "surplus_value": round(engine_advice.fmv - nom_bid, 1) if nom_bid > 0 and engine_advice.fmv else None,
+            "adp_vs_fmv": engine_advice.adp_vs_fmv,
+            "opponent_demand": engine_advice.opponent_demand,
+            "source": "engine",
+            "player_news": nom_news,
+        }
 
-    # Apply team aliases to opponent needs
+        # Overlay AI advice if cached
+        from ai_advisor import _advice_cache, CACHE_TTL_SECONDS
+        cache_key = nom_player.lower().strip()
+        ai_cached = _advice_cache.get(cache_key)
+        if ai_cached and (time.time() - ai_cached[1]) < CACHE_TTL_SECONDS:
+            ai = ai_cached[0]
+            current_advice["action"] = ai.action.value
+            current_advice["max_bid"] = ai.max_bid
+            current_advice["ai_reasoning"] = ai.reasoning
+            current_advice["reasoning"] = ai.reasoning
+            current_advice["source"] = ai.source
+        return current_advice
+    except Exception:
+        return None
+
+
+def _build_opponent_needs(state: DraftState) -> dict:
+    """Build opponent positional needs with team aliases applied."""
     opponent_needs = state.opponent_tracker.get_summary()
-    # Build aliased name→team_id mapping so frontend can correlate budget names to roster data
+    # Build aliased name->team_id mapping so frontend can correlate budget names to roster data
     name_to_id = {}
     for tid, tname in opponent_needs.get("team_names", {}).items():
         aliased = state.apply_alias(tname)
@@ -838,11 +970,13 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         tid = str(t.get("team_id", ""))
         raw_name = opponent_needs.get("team_names", {}).get(tid, tid)
         t["display_name"] = state.apply_alias(raw_name)
+    return opponent_needs
 
-    # Player news map for undrafted players with injury info
-    player_news_map = player_news.get_news_for_undrafted(state)
 
-    # VOM (Value Over Market) leaderboard for drafted players
+def _build_vom_leaderboard(state: DraftState) -> list[dict]:
+    """Build the Value Over Market leaderboard for all drafted players, sorted by VOM."""
+    from engine import calculate_fmv
+
     vom_leaderboard = []
     for ps in state.players.values():
         if ps.is_drafted and ps.draft_price is not None:
@@ -859,12 +993,13 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
                 "drafted_by": state.apply_alias(ps.drafted_by_team),
             })
     vom_leaderboard.sort(key=lambda x: x["vom"], reverse=True)
+    return vom_leaderboard
 
-    # Roster optimizer
-    from roster_optimizer import get_optimal_plan
-    optimizer = get_optimal_plan(state)
 
-    # --- Position price tracking: actual price vs FMV per position ---
+def _build_positional_prices(state: DraftState) -> dict[str, dict]:
+    """Compute actual price vs FMV percentage per position for all drafted players."""
+    from engine import calculate_fmv
+
     pos_price_data: dict[str, dict] = {}
     for ps in state.players.values():
         if ps.is_drafted and ps.draft_price is not None:
@@ -882,42 +1017,51 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
             positional_prices[pos] = {"pct_of_fmv": pct, "count": d["count"]}
         else:
             positional_prices[pos] = {"pct_of_fmv": 100, "count": 0}
+    return positional_prices
 
-    # --- Positional run detection: 3+ consecutive same-position sales above FMV ---
-    positional_run = None
-    if len(state.draft_log) >= 3:
-        # Walk backwards through draft log to find runs
-        run_pos = None
-        run_count = 0
-        run_above_fmv = 0
-        for entry in reversed(state.draft_log[-6:]):
-            name = entry.get("playerName", "")
-            ps = state.get_player(name)
-            if not ps:
-                break
-            pos = ps.projection.position.value
-            price = entry.get("bidAmount", 0)
-            if run_pos is None:
-                run_pos = pos
-                run_count = 1
-                if price > calculate_fmv(ps, state):
-                    run_above_fmv = 1
-            elif pos == run_pos:
-                run_count += 1
-                if price > calculate_fmv(ps, state):
-                    run_above_fmv += 1
-            else:
-                break
-        if run_count >= 3:
-            avg_pct = positional_prices.get(run_pos, {}).get("pct_of_fmv", 100)
-            positional_run = {
-                "position": run_pos,
-                "consecutive": run_count,
-                "above_fmv_count": run_above_fmv,
-                "avg_pct_of_fmv": avg_pct,
-            }
 
-    # --- Money velocity: league spending rate ---
+def _build_positional_run(state: DraftState, positional_prices: dict[str, dict]) -> Optional[dict]:
+    """Detect positional runs: 3+ consecutive same-position sales in the recent draft log."""
+    from engine import calculate_fmv
+
+    if len(state.draft_log) < 3:
+        return None
+
+    # Walk backwards through draft log to find runs
+    run_pos = None
+    run_count = 0
+    run_above_fmv = 0
+    for entry in reversed(state.draft_log[-6:]):
+        name = entry.get("playerName", "")
+        ps = state.get_player(name)
+        if not ps:
+            break
+        pos = ps.projection.position.value
+        price = entry.get("bidAmount", 0)
+        if run_pos is None:
+            run_pos = pos
+            run_count = 1
+            if price > calculate_fmv(ps, state):
+                run_above_fmv = 1
+        elif pos == run_pos:
+            run_count += 1
+            if price > calculate_fmv(ps, state):
+                run_above_fmv += 1
+        else:
+            break
+    if run_count >= 3:
+        avg_pct = positional_prices.get(run_pos, {}).get("pct_of_fmv", 100)
+        return {
+            "position": run_pos,
+            "consecutive": run_count,
+            "above_fmv_count": run_above_fmv,
+            "avg_pct_of_fmv": avg_pct,
+        }
+    return None
+
+
+def _build_money_velocity(state: DraftState) -> dict:
+    """Compute league-wide spending velocity metrics."""
     total_drafted = sum(1 for ps in state.players.values() if ps.is_drafted)
     total_players = len(state.players)
     total_spent = sum(
@@ -931,7 +1075,7 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
     # Predict bargain zone: when velocity drops below 1.0
     velocity = round(spend_pct / draft_pct, 2) if draft_pct > 0 else 1.0
     avg_price = round(total_spent / total_drafted, 1) if total_drafted else 0
-    money_velocity = {
+    return {
         "total_spent": total_spent,
         "total_budget": total_league_budget,
         "spend_pct": spend_pct,
@@ -942,17 +1086,51 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
         "players_total": total_players,
     }
 
-    # Augment my roster with team/bye info
+
+def _build_my_team_data(state: DraftState) -> dict:
+    """Build augmented my-team data with NFL team and bye week info."""
     my_team_data = state.my_team.model_dump()
     for p in my_team_data.get("players_acquired", []):
         roster_info = player_news.get_player_roster_info(p["name"])
         p["team"] = roster_info.get("team")
         p["bye_week"] = roster_info.get("bye_week")
+    return my_team_data
+
+
+def _build_budgets(state: DraftState) -> dict[str, int]:
+    """Get team budgets with aliases applied."""
+    return state.get_aliased_budgets()
+
+
+def _get_dashboard_snapshot(state: DraftState) -> dict:
+    """Build a comprehensive state snapshot for the web dashboard.
+
+    Orchestrates sub-functions that each compute one section of the snapshot,
+    then assembles and returns the final dict.
+    """
+    from sleeper_watch import get_sleeper_candidates
+    from nomination import get_nomination_suggestions
+    from engine import get_positional_vona_summary
+    from roster_optimizer import get_optimal_plan
+
+    players = _build_player_list(state)
+    top_remaining = _build_top_remaining(state)
+    ticker_events = _build_ticker_events(state)
+    current_advice = _build_current_advice(state)
+    opponent_needs = _build_opponent_needs(state)
+    player_news_map = player_news.get_news_for_undrafted(state)
+    vom_leaderboard = _build_vom_leaderboard(state)
+    optimizer = get_optimal_plan(state)
+    positional_prices = _build_positional_prices(state)
+    positional_run = _build_positional_run(state, positional_prices)
+    money_velocity = _build_money_velocity(state)
+    my_team_data = _build_my_team_data(state)
+    budgets = _build_budgets(state)
 
     return {
         "players": players,
         "my_team": my_team_data,
-        "budgets": state.get_aliased_budgets(),
+        "budgets": budgets,
         "team_aliases": state.team_aliases,
         "inflation": round(state.get_inflation_factor(), 3),
         "inflation_history": state.inflation_history,
@@ -984,6 +1162,10 @@ def _get_dashboard_snapshot(state: DraftState) -> dict:
             k: {"label": v["label"], "description": v["description"]}
             for k, v in DRAFT_STRATEGIES.items()
         },
+        "available_sheets": list(settings.available_sheets.keys()),
+        "active_sheet": state.active_sheet if state.active_sheet else (
+            list(settings.available_sheets.keys())[0] if settings.available_sheets else None
+        ),
     }
 
 

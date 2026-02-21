@@ -120,6 +120,7 @@ class PlayerState(BaseModel):
     is_drafted: bool = False
     draft_price: Optional[int] = None
     drafted_by_team: Optional[str] = None
+    is_keeper: bool = False
     vorp: float = 0.0
     vona: float = 0.0
     vona_next_player: Optional[str] = None

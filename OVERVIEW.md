@@ -13,20 +13,20 @@ A real-time fantasy football auction draft assistant built primarily for the Sle
 │    fallback          │                             │  • Opponent modeling │
 │  • Overlay UI        │                             │  • Ticker + alerts   │
 └─────────────────────┘                              └──────┬───────────────┘
-                                                            │ WebSocket
-                                                            ▼
-                                                     ┌──────────────────────┐
-                                                     │   React Dashboard    │
-                                                     │   (Vite + daisyUI)   │
-                                                     │                      │
-                                                     │  • DraftBoard table  │
-                                                     │  • Roster optimizer  │
-                                                     │  • AI draft plan     │
-                                                     │  • Budget tracker    │
-                                                     │  • Scarcity heatmap  │
-                                                     │  • VOM leaderboard   │
-                                                     │  • Live ticker feed  │
-                                                     └──────────────────────┘
+                                                           │ WebSocket
+                                                           ▼
+                                                    ┌──────────────────────┐
+                                                    │   React Dashboard    │
+                                                    │   (Vite + daisyUI)   │
+                                                    │                      │
+                                                    │  • DraftBoard table  │
+                                                    │  • Roster optimizer  │
+                                                    │  • AI draft plan     │
+                                                    │  • Budget tracker    │
+                                                    │  • Scarcity heatmap  │
+                                                    │  • VOM leaderboard   │
+                                                    │  • Live ticker feed  │
+                                                    └──────────────────────┘
 ```
 
 ---
@@ -404,10 +404,10 @@ When a player is drafted to your team, slot assignment follows priority: **dedic
 
 | Variable | Default | Description |
 |---|---|---|
-| `AI_PROVIDER` | `"gemini"` | `claude` or `gemini` |
+| `AI_PROVIDER` | `"claude"` | `claude` or `gemini` |
 | `ANTHROPIC_API_KEY` | *(none)* | Claude API key (required if `AI_PROVIDER=claude`) |
 | `GEMINI_API_KEY` | *(none)* | Gemini API key (required if `AI_PROVIDER=gemini`) |
-| `PLATFORM` | `"espn"` | `sleeper` or `espn` — auto-detected from extension |
+| `PLATFORM` | `"sleeper"` | `sleeper` or `espn` — auto-detected from extension |
 | `MY_TEAM_NAME` | `"My Team"` | Your team name as shown on the platform (comma-separated for aliases) |
 | `LEAGUE_SIZE` | `10` | Number of teams in the league |
 | `BUDGET` | `200` | Starting auction budget per team |

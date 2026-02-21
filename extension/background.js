@@ -1,9 +1,16 @@
 // background.js - Manifest V3 service worker
 // Handles ESPN cookie retrieval, server communication, and response relay
 
-const SERVER_URL = "http://localhost:8000/draft_update";
-const MANUAL_URL = "http://localhost:8000/manual";
-const HEALTH_URL = "http://localhost:8000/health";
+const DEFAULT_SERVER = "http://localhost:8000";
+
+async function getServerUrl() {
+  try {
+    const result = await chrome.storage.sync.get({ serverUrl: DEFAULT_SERVER });
+    return result.serverUrl.replace(/\/+$/, '');  // strip trailing slash
+  } catch {
+    return DEFAULT_SERVER;
+  }
+}
 
 // Hardcode fallback tokens here if cookie reading fails.
 // Leave as null to rely on browser cookies.
@@ -81,13 +88,14 @@ async function getPlatformAuth(payload) {
 
 async function sendToServer(payload) {
   const auth = await getPlatformAuth(payload);
+  const serverUrl = await getServerUrl();
 
   const body = {
     ...payload,
     auth,
   };
 
-  const response = await fetch(SERVER_URL, {
+  const response = await fetch(`${serverUrl}/draft_update`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -165,7 +173,8 @@ async function handleDraftUpdate(payload, tabId) {
 
 async function handleManualOverride(command, tabId) {
   try {
-    const response = await fetch(MANUAL_URL, {
+    const serverUrl = await getServerUrl();
+    const response = await fetch(`${serverUrl}/manual`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command }),
@@ -214,7 +223,8 @@ async function handleManualOverride(command, tabId) {
 
 async function checkHealth() {
   try {
-    const resp = await fetch(HEALTH_URL, { method: "GET" });
+    const serverUrl = await getServerUrl();
+    const resp = await fetch(`${serverUrl}/health`, { method: "GET" });
     if (resp.ok) {
       broadcastToContentScripts({ connected: true });
     } else {
