@@ -19,3 +19,4 @@ data/historical/
 
 # Claude Code
 .claude/settings.local.json
+.claude/docs/
