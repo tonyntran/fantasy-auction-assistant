@@ -25,6 +25,10 @@ A real-time fantasy football auction draft assistant built primarily for the Sle
                                                     │  • Budget tracker    │
                                                     │  • Scarcity heatmap  │
                                                     │  • VOM leaderboard   │
+                                                    │  • What-if modal     │
+                                                    │  • Draft grading     │
+                                                    │  • Player comparison │
+                                                    │  • Export results    │
                                                     │  • Live ticker feed  │
                                                     └──────────────────────┘
 ```
@@ -55,8 +59,12 @@ fantasy-auction-assistant/
 │   ├── what_if.py           # Draft simulation — "what if I spend $X on Player Y?"
 │   ├── grader.py            # Post-draft AI grading — position grades, best/worst picks
 │   ├── event_store.py       # Append-only JSONL event log for crash recovery
+│   ├── keepers.py           # Keeper/dynasty league CSV loader — pre-drafts players, adjusts budgets
 │   ├── requirements.txt
+│   ├── pyproject.toml       # pytest configuration
+│   ├── .env.example         # Configuration template with all variables documented
 │   ├── .env                 # Configuration (API keys, league settings, roster slots)
+│   ├── tests/               # pytest suite (221 tests) — engine, state, models, config, events, etc.
 │   └── data/
 │       └── sheet_2026.csv   # Player projections (name, position, points, AAV, tier)
 │
@@ -64,27 +72,36 @@ fantasy-auction-assistant/
 │   ├── manifest.json        # Manifest V3 — Sleeper + ESPN content scripts
 │   ├── content.js           # MAIN world — Sleeper WS interceptor, ESPN Fiber scraping, overlay UI
 │   ├── content-bridge.js    # ISOLATED world — chrome.runtime message bridge
-│   └── background.js        # Service worker — cookie extraction, server comms, health polling
+│   ├── background.js        # Service worker — cookie extraction, server comms, health polling
+│   ├── options.html         # Extension settings page (server URL, overlay position)
+│   └── options.js           # Settings page logic — saves to chrome.storage.sync
 │
 └── dashboard/
     ├── src/
     │   ├── App.jsx
     │   ├── hooks/
-    │   │   ├── useDraftState.js   # Fetches initial state + subscribes to WebSocket
-    │   │   └── useWebSocket.js    # Persistent WS with auto-reconnect
+    │   │   ├── useDraftState.js     # Fetches initial state + subscribes to WebSocket
+    │   │   ├── useWebSocket.js      # Persistent WS with auto-reconnect
+    │   │   └── usePersistedState.js # Generic localStorage persistence hook
     │   └── components/
-    │       ├── Header.jsx          # Strategy selector, position price chips, run alert, budget, inflation
-    │       ├── CurrentAdvice.jsx   # AI/engine rec with FMV/VORP/VONA/surplus/PAR$ + news
-    │       ├── MyRoster.jsx        # Roster with pts/wk, pts/$, and team total pts/wk
-    │       ├── DraftBoard.jsx      # Full player table with filters, search, and news badges
-    │       ├── TeamOverview.jsx    # All-team budgets + opponent needs + money velocity tracker
-    │       ├── ScarcityHeatMap.jsx # Position/tier supply remaining
-    │       ├── TopRemaining.jsx    # Top undrafted w/ VORP, cross-pos VONA, tier breaks, news
-    │       ├── RosterOptimizer.jsx # Optimal picks with PAR/$ + AI draft plan
-    │       ├── VomLeaderboard.jsx  # Value Over Market — bargains/overpays with PAR/$
-    │       ├── NominationPanel.jsx # Strategic nomination suggestions
-    │       ├── SleeperWatch.jsx    # Late-draft bargain candidates
-    │       └── ActivityFeed.jsx    # Live ticker event stream
+    │       ├── Header.jsx            # Strategy selector, sheet selector, pos prices, run alert, budget
+    │       ├── CurrentAdvice.jsx     # AI/engine rec with FMV/VORP/VONA/surplus/PAR$ + news
+    │       ├── MyRoster.jsx          # Roster with pts/wk, pts/$, keeper badges, team total
+    │       ├── DraftBoard.jsx        # Sortable player table — filters, search, compare mode, what-if
+    │       ├── ManualInput.jsx       # Collapsible command panel (sold, undo, budget, nom, suggest)
+    │       ├── TeamOverview.jsx      # All-team budgets + opponent needs + money velocity tracker
+    │       ├── ScarcityHeatMap.jsx   # Position/tier supply remaining
+    │       ├── TopRemaining.jsx      # Top undrafted w/ VORP, cross-pos VONA, tier breaks, news
+    │       ├── RosterOptimizer.jsx   # Optimal picks with PAR/$ + AI draft plan
+    │       ├── VomLeaderboard.jsx    # Value Over Market — bargains/overpays with PAR/$
+    │       ├── NominationPanel.jsx   # Strategic nomination suggestions
+    │       ├── SleeperWatch.jsx      # Late-draft bargain candidates
+    │       ├── ActivityFeed.jsx      # Live ticker event stream
+    │       ├── WhatIfModal.jsx       # What-if simulation modal with optimal picks projection
+    │       ├── DraftGrade.jsx        # Post-draft AI grading with letter grades
+    │       ├── PlayerComparison.jsx  # Side-by-side metric comparison (2-3 players)
+    │       ├── ExportButton.jsx      # JSON/CSV export of draft results
+    │       └── ErrorBoundary.jsx     # React error boundary wrapping all major components
     ├── tailwind.config.js
     └── package.json
 ```
@@ -287,6 +304,17 @@ Falls back to engine-only grade (points + surplus totals) if AI is unavailable.
 
 Every `/draft_update` and `/manual` call is appended to `event_log.jsonl` with a sequence number. On startup, the entire log is replayed to reconstruct state. The server can crash mid-draft and pick up exactly where it left off.
 
+### Keeper League Support (`keepers.py`)
+
+Loads a CSV of keeper players (`KEEPERS_CSV` env var, format: `PlayerName,Team,Price`). On startup:
+
+- Marks players as drafted with `is_keeper=True`
+- Deducts keeper costs from team budgets (flows into inflation calculations)
+- Fills roster slots with dedicated > flex > bench priority
+- Case-insensitive team matching
+
+Edge cases handled: missing CSV, player not found, duplicates, invalid prices. When `KEEPERS_CSV` is empty, the keeper flow is completely bypassed.
+
 ---
 
 ## Chrome Extension
@@ -310,8 +338,18 @@ The extension uses a **dual-world injection pattern** to bridge page context wit
                                                         │  • POST to backend       │
                                                         │  • Health polling (5s)   │
                                                         │  • Cookie extraction     │
+                                                        │  • Configurable server   │
+                                                        │    URL (options page)    │
                                                         └──────────────────────────┘
 ```
+
+### Options Page (`options.html` / `options.js`)
+
+Extension settings page accessible from `chrome://extensions`. Configurable:
+- **Server URL** — backend address (default: `http://localhost:8000`)
+- **Overlay position** — top-left, top-right, bottom-left, bottom-right
+
+Settings saved to `chrome.storage.sync` and read by `background.js` and `content.js`.
 
 ### Sleeper Integration (`content.js`)
 
@@ -350,26 +388,31 @@ A panel injected into the draft page with inline styles:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  Header: strategy │ pos prices (QB 105% RB 118%...) │ run alert │ budget │ inflation │
+│  Header: strategy │ sheet selector │ pos prices │ run alert │ budget │ infl  │
 ├───────────────────┬─────────────────┬──────────────────┬─────────────────────┤
 │ CurrentAdvice     │  TopRemaining   │  ActivityFeed    │ RosterOptimizer     │
 │ (latest rec +     │  (top undrafted │  (live ticker)   │ (optimal picks +    │
 │  player news)     │   by position)  │                  │  AI draft plan,     │
 ├───────────────────┼─────────────────┼──────────────────┤  sticky sidebar)    │
-│ MyRoster          │  TeamOverview   │  ScarcityHeatMap │                     │
-│ (starters + bench │  (budgets +     │  (pos/tier grid) │                     │
-│  pts/wk + pts/$)  │   opp needs +   │                  │                     │
-│                   │   velocity)     │                  │                     │
-├───────────────────┼─────────────────┼──────────────────┤                     │
+│ ManualInput       │  TeamOverview   │  ScarcityHeatMap │                     │
+│ (collapsible cmd) │  (budgets +     │  (pos/tier grid) ├─────────────────────┤
+├───────────────────┤   opp needs +   │                  │ DraftGrade          │
+│ MyRoster          │   velocity)     │                  │ (AI letter grades)  │
+│ (starters + bench │                 │                  ├─────────────────────┤
+│  keeper badges)   │                 │                  │ ExportButton        │
+├───────────────────┼─────────────────┼──────────────────┤ (JSON/CSV export)   │
 │ VomLeaderboard    │  SleeperWatch   │  NominationPanel │                     │
 │ (bargains/overpay)│  (endgame $1-3) │  (nom strategy)  │                     │
 ├───────────────────┴─────────────────┴──────────────────┴─────────────────────┤
-│ DraftBoard (full player table — filter by position, search, news badges)     │
+│ DraftBoard (sortable player table — filters, search, compare, what-if)       │
 │ Columns: Player, Pos, Tier, Pts, FMV, VORP, VONA, Status, Price, Buyer      │
+│ Click player name → WhatIfModal | Compare toggle → PlayerComparison modal    │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ Glossary (VORP, VONA, FMV, Inflation, VOM definitions + value scales)        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+All major components are wrapped in `ErrorBoundary` — individual component crashes show a fallback message instead of taking down the entire dashboard.
 
 ### Real-Time Updates
 
@@ -418,8 +461,10 @@ When a player is drafted to your team, slot assignment follows priority: **dedic
 | `CSV_PATHS` | *(none)* | Multi-source: `path1,path2,path3` |
 | `PROJECTION_WEIGHTS` | *(none)* | Weights per source: `0.5,0.3,0.2` |
 | `ADP_CSV_PATH` | *(none)* | ADP auction values for market comparison |
+| `KEEPERS_CSV` | *(none)* | Keeper league CSV path (format: `PlayerName,Team,Price`) |
+| `EVENT_LOG_PATH` | `data/event_log.jsonl` | Event log path for crash recovery |
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Claude model for per-player advice |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model (if using Gemini) |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model (if using Gemini) |
 | `AI_TIMEOUT_MS` | `8000` | Max wait for AI response (ms) |
 | `VORP_BASELINE_QB` | `11` | Replacement level rank for QB |
 | `VORP_BASELINE_RB` | `30` | Replacement level rank for RB |
@@ -445,10 +490,12 @@ When a player is drafted to your team, slot assignment follows priority: **dedic
 | `GET` | `/grade` | Post-draft AI grading |
 | `GET` | `/optimize` | Optimal remaining picks |
 | `GET` | `/draft-plan` | On-demand AI draft plan with spending analysis |
+| `GET` | `/export?format=json\|csv` | Export draft results (auto-saves JSON to `data/historical/`) |
+| `POST` | `/projection-sheet` | Switch active projection source |
 | `GET` | `/dashboard/state` | Full state snapshot for dashboard |
 | `GET` | `/state` | Debug state summary |
 | `GET` | `/team_aliases` | View current team aliases |
-| `WS` | `/ws` | Real-time updates to dashboard |
+| `WS` | `/ws` | Real-time updates to dashboard (read-only subscription) |
 
 ---
 

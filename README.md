@@ -18,11 +18,16 @@ Chrome Extension ──► FastAPI Backend ──► React Dashboard
 - **Opponent modeling** — positional needs, bidding war risk, spending power analysis
 - **Draft strategy profiles** — Balanced, Studs & Steals, RB Heavy, WR Heavy, Elite TE — switchable at runtime
 - **Nomination strategy** — budget drain, rival desperation, and bargain snag suggestions
-- **What-if simulator** — project your roster if you win a player at a given price
+- **What-if simulator** — click any undrafted player to project your roster if you win at a given price
+- **Player comparison** — select 2-3 players for side-by-side metric comparison
 - **VOM Leaderboard** — Value Over Market tracking for all drafted players
 - **Player news** — injury and status data from Sleeper's player database
 - **Post-draft grading** — AI-generated letter grades per position with waiver wire targets
-- **Real-time dashboard** — draft board, budget tracker, scarcity heatmap, ticker feed, and more
+- **Export draft results** — JSON/CSV download of all picks with FMV, VORP, and surplus stats
+- **Keeper/dynasty support** — pre-load keepers from CSV with budget and roster adjustments
+- **Multi-sheet projections** — switch between projection sources mid-draft
+- **Manual input panel** — collapsible command panel (sold, undo, budget, nom, suggest)
+- **Real-time dashboard** — sortable draft board, budget tracker, scarcity heatmap, ticker feed, and more
 
 ## Quick Start
 
@@ -64,6 +69,8 @@ Key `.env` variables:
 | `BUDGET` | `200` | Starting auction budget per team |
 | `ROSTER_SLOTS` | `QB,RB,RB,WR,WR,TE,FLEX,FLEX,K,DEF,BENCH×6` | Roster structure |
 | `DRAFT_STRATEGY` | `balanced` | `balanced`, `studs_and_steals`, `rb_heavy`, `wr_heavy`, `elite_te` |
+| `KEEPERS_CSV` | *(none)* | Keeper league CSV path (format: `PlayerName,Team,Price`) |
+| `CSV_PATHS` | *(none)* | Multi-source projections (comma-separated CSV paths) |
 
 See [OVERVIEW.md](OVERVIEW.md) for the full configuration reference, architecture details, and API documentation.
 
